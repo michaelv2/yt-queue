@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>yt-queue — Triage</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>yt-queue <span class="subtitle">Triage</span></h1>
+    <nav>
+      <a href="/">Submit</a>
+      <a href="/archive.html">Archive</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="triage-controls">
+      <div id="triage-meta"></div>
+      <div class="triage-actions">
+        <button id="summarize-btn" class="btn-summarize">Generate summaries</button>
+        <span id="summarize-status" class="summarize-status hidden"></span>
+      </div>
+      <div class="filter-bar">
+        <label>Show:
+          <select id="filter-select">
+            <option value="all">All</option>
+            <option value="flagged">Flagged only</option>
+            <option value="high">High relevance (≥0.7)</option>
+            <option value="medium">Medium (≥0.4)</option>
+          </select>
+        </label>
+        <label>Sort:
+          <select id="sort-select">
+            <option value="relevance">By relevance</option>
+            <option value="title">By title</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div id="batch-progress" class="batch-progress hidden">
+      <div class="progress-bar-wrap">
+        <div id="batch-prog-bar" class="progress-bar" style="width:0%"></div>
+      </div>
+      <p id="batch-prog-label" class="batch-stats">Loading…</p>
+    </div>
+
+    <div id="card-grid" class="card-grid">
+      <p class="empty" id="loading-msg">Loading triage data…</p>
+    </div>
+  </main>
+
+  <script src="/triage.js"></script>
+</body>
+</html>

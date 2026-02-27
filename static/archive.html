@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>yt-queue — Archive</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>yt-queue <span class="subtitle">Archive</span></h1>
+    <nav>
+      <a href="/">Submit</a>
+      <a href="/archive.html" class="active">Archive</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="archive-controls">
+      <span id="total-count" class="total-count"></span>
+      <div class="score-controls">
+        <input type="text" id="score-criteria" placeholder="Score by criteria…" autocomplete="off">
+        <button id="score-btn">Score all</button>
+        <span id="score-status" class="score-status hidden"></span>
+      </div>
+      <button id="delete-btn" class="btn-danger hidden">Delete selected</button>
+    </div>
+    <div id="archive-table-wrap">
+      <table id="archive-table">
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="select-all"></th>
+            <th data-col="title" data-label="Title">Title</th>
+            <th data-col="duration" data-label="Duration">Duration</th>
+            <th>Summary</th>
+            <th data-col="relevance_score" data-label="Score">Score ↓<div id="score-criteria-label" class="score-criteria-label"></div></th>
+            <th data-col="batch_id" data-label="Batch">Batch</th>
+            <th data-col="archived_at" data-label="Archived">Archived</th>
+          </tr>
+        </thead>
+        <tbody id="archive-body"></tbody>
+      </table>
+    </div>
+    <div id="pagination" class="pagination"></div>
+  </main>
+
+  <script src="/archive.js"></script>
+</body>
+</html>

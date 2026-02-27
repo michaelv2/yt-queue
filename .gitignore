@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+data/
+/tmp/ytqueue/
+*.db
+*.db-wal
+*.db-shm
+.env

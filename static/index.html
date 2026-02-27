@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>yt-queue</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1>yt-queue</h1>
+    <nav>
+      <a href="/" class="active">Submit</a>
+      <a href="/archive.html">Archive</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="submit-section">
+      <h2>Submit YouTube URLs</h2>
+      <form id="batch-form">
+        <div class="field">
+          <label for="urls">YouTube URLs <span class="hint">(one per line or comma-separated)</span></label>
+          <textarea id="urls" name="urls" rows="6"
+            placeholder="https://www.youtube.com/watch?v=...&#10;https://youtu.be/..."></textarea>
+        </div>
+        <div class="field">
+          <label for="criteria">Filter criteria <span class="hint">(optional — used to score relevance)</span></label>
+          <input type="text" id="criteria" name="criteria"
+            placeholder="e.g. Python tutorials about async programming">
+        </div>
+        <button type="submit" id="submit-btn">Start batch</button>
+      </form>
+    </section>
+
+    <section id="progress-section" class="hidden">
+      <h2>Batch progress</h2>
+      <div id="batch-summary" class="batch-summary"></div>
+      <div id="job-list" class="job-list"></div>
+      <div id="triage-link-wrap" class="hidden">
+        <a id="triage-link" href="#" class="btn-primary">View triage results →</a>
+      </div>
+    </section>
+
+    <details id="bookmarklet-section" class="collapsible-section">
+      <summary>Bookmarklet</summary>
+      <p class="bookmarklet-desc">Drag this to your bookmarks bar, then click it on any YouTube playlist page to send all videos to yt-queue.</p>
+      <div class="bookmarklet-row">
+        <a id="bookmarklet-link" href="#" class="bookmarklet-drag" title="Drag to bookmarks bar">⭐ yt-queue Playlist</a>
+        <span class="bookmarklet-hint">← drag to bookmarks bar</span>
+      </div>
+    </details>
+
+    <section id="history-section">
+      <h2>Recent batches</h2>
+      <div id="history-list" class="history-list"></div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

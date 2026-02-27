@@ -1,0 +1,435 @@
+"""FastAPI application — routes + lifespan."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
+
+from .config import settings
+from .database import ArchiveDB
+from .jobs import BatchStore, JobRunner, JobStore, cleanup_loop
+from pydantic import BaseModel
+
+from .models import (
+    ArchiveDeleteRequest,
+    ArchiveDeleteResponse,
+    ArchiveEntry,
+    ArchiveListResponse,
+    ArchiveTranscriptResponse,
+    BatchStatus,
+    BatchSubmitRequest,
+    BatchSubmitResponse,
+    JobStatus,
+    JobStatusResponse,
+    TranscriptSegment,
+    TriageEntry,
+)
+from .summarizer import get_llm
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+log = logging.getLogger(__name__)
+
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+STATIC_DIR = PROJECT_DIR / "static"
+
+# ── YouTube URL/ID parsing ────────────────────────────────────────────────────
+
+_YT_PATTERNS = [
+    re.compile(r"(?:youtube\.com/watch\?.*v=|youtu\.be/|youtube\.com/embed/)([A-Za-z0-9_-]{11})"),
+    re.compile(r"^([A-Za-z0-9_-]{11})$"),
+]
+
+
+def extract_video_id(url: str) -> str:
+    url = url.strip()
+    for pat in _YT_PATTERNS:
+        m = pat.search(url)
+        if m:
+            return m.group(1)
+    raise ValueError(f"Could not extract YouTube video ID from: {url}")
+
+
+def parse_urls(raw: list[str]) -> list[str]:
+    """Flatten comma/newline-separated URL lists and strip empties."""
+    result = []
+    for item in raw:
+        for part in re.split(r"[\n,]+", item):
+            stripped = part.strip()
+            if stripped:
+                result.append(stripped)
+    return result
+
+
+# ── App globals ───────────────────────────────────────────────────────────────
+
+store = JobStore()
+batch_store = BatchStore()
+archive_db = ArchiveDB(settings.db_path)
+llm = get_llm(settings)
+runner = JobRunner(store, batch_store, archive_db=archive_db, llm=llm)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Path(settings.temp_dir).mkdir(parents=True, exist_ok=True)
+    Path(settings.audio_dir).mkdir(parents=True, exist_ok=True)
+    await archive_db.init()
+    cleanup_task = asyncio.create_task(cleanup_loop(store))
+    log.info(
+        "yt-queue started — model=%s, device=%s, llm_provider=%s",
+        settings.whisper_model,
+        settings.whisper_device,
+        settings.llm_provider,
+    )
+    yield
+    cleanup_task.cancel()
+    await archive_db.close()
+
+
+app = FastAPI(title="yt-queue", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://www.youtube.com", "https://youtu.be"],
+    allow_methods=["POST"],
+    allow_headers=["Content-Type"],
+)
+
+
+# ── Batch routes ──────────────────────────────────────────────────────────────
+
+
+@app.get("/api/batches")
+async def list_batches(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    batches = await archive_db.list_batches(limit=limit, offset=offset)
+    # Annotate each with a video count from the DB
+    result = []
+    for b in batches:
+        count = await archive_db.count_batch(b["id"])
+        titles = await archive_db.sample_batch_titles(b["id"], n=3)
+        result.append({**b, "count": count, "sample_titles": titles})
+    return result
+
+
+@app.post("/api/batches", status_code=202)
+async def create_batch(req: BatchSubmitRequest) -> BatchSubmitResponse:
+    urls = parse_urls(req.urls)
+    if not urls:
+        raise HTTPException(status_code=400, detail="No URLs provided")
+
+    video_ids: list[str] = []
+    errors: list[str] = []
+    for url in urls:
+        try:
+            video_ids.append(extract_video_id(url))
+        except ValueError as e:
+            errors.append(str(e))
+
+    if not video_ids:
+        raise HTTPException(status_code=400, detail=f"No valid YouTube URLs. Errors: {errors}")
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique_ids = [vid for vid in video_ids if not (vid in seen or seen.add(vid))]
+
+    batch_id = batch_store.create(filter_criteria=req.filter_criteria)
+    await archive_db.create_batch(batch_id, filter_criteria=req.filter_criteria)
+
+    job_ids: list[str] = []
+    for video_id in unique_ids:
+        job = await store.create(video_id=video_id, batch_id=batch_id)
+        batch_store.add_job(batch_id, job.id)
+        job_ids.append(job.id)
+        await runner.submit(job, filter_criteria=req.filter_criteria)
+
+    return BatchSubmitResponse(batch_id=batch_id, job_ids=job_ids)
+
+
+@app.get("/api/batches/{batch_id}")
+async def get_batch_status(batch_id: str) -> BatchStatus:
+    batch = batch_store.get(batch_id)
+    if not batch:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    jobs = []
+    for jid in batch["job_ids"]:
+        job = await store.get(jid)
+        if job:
+            jobs.append(JobStatusResponse(
+                id=job.id,
+                video_id=job.video_id,
+                batch_id=job.batch_id,
+                status=job.status,
+                progress=job.progress,
+                title=job.title,
+                duration=job.duration,
+                error=job.error,
+                summary=job.summary,
+                relevance_score=job.relevance_score,
+            ))
+
+    completed = sum(1 for j in jobs if j.status == JobStatus.completed)
+    failed = sum(1 for j in jobs if j.status == JobStatus.failed)
+    in_progress = sum(1 for j in jobs if j.status not in (JobStatus.completed, JobStatus.failed))
+
+    total = len(jobs)
+    if total == 0 or in_progress > 0:
+        status = "processing" if total > 0 else "pending"
+    elif failed == total:
+        status = "failed"
+    else:
+        status = "complete"
+
+    return BatchStatus(
+        batch_id=batch_id,
+        filter_criteria=batch["filter_criteria"],
+        total=total,
+        completed=completed,
+        failed=failed,
+        in_progress=in_progress,
+        status=status,
+        jobs=jobs,
+    )
+
+
+# ── Summarize route ───────────────────────────────────────────────────────────
+
+_summarize_running: set[str] = set()
+
+
+async def _run_summarize_batch(batch_id: str) -> None:
+    loop = asyncio.get_running_loop()
+    try:
+        rows = await archive_db.get_batch_texts(batch_id)
+        log.info("Re-summarizing %d transcripts for batch %s", len(rows), batch_id)
+        for row in rows:
+            try:
+                summary = await loop.run_in_executor(
+                    None, llm.summarize, row["full_text"], settings.summary_max_words
+                )
+                await archive_db.update_summary(row["id"], summary)
+            except Exception:
+                log.warning("Failed to summarize row %d", row["id"], exc_info=True)
+    finally:
+        _summarize_running.discard(batch_id)
+    log.info("Re-summarization complete for batch %s", batch_id)
+
+
+@app.post("/api/batches/{batch_id}/summarize", status_code=202)
+async def summarize_batch(batch_id: str):
+    rows = await archive_db.get_batch_texts(batch_id)
+    if not rows:
+        raise HTTPException(status_code=404, detail="No transcripts found for this batch")
+    if isinstance(llm, __import__('app.summarizer', fromlist=['NullLLM']).NullLLM):
+        raise HTTPException(status_code=400, detail="No LLM provider configured (YTQUEUE_LLM_PROVIDER=none)")
+    if batch_id in _summarize_running:
+        return {"status": "already_running", "batch_id": batch_id, "count": len(rows)}
+    _summarize_running.add(batch_id)
+    asyncio.create_task(_run_summarize_batch(batch_id))
+    return {"status": "started", "batch_id": batch_id, "count": len(rows)}
+
+
+@app.get("/api/batches/{batch_id}/summarize")
+async def summarize_batch_status(batch_id: str):
+    return {"batch_id": batch_id, "running": batch_id in _summarize_running}
+
+
+# ── Triage route ──────────────────────────────────────────────────────────────
+
+
+@app.get("/api/triage/{batch_id}")
+async def get_triage(batch_id: str) -> list[TriageEntry]:
+    rows = await archive_db.get_triage(batch_id)
+    video_ids = [r["video_id"] for r in rows]
+    prev_deleted = await archive_db.get_previously_deleted(video_ids)
+    return [
+        TriageEntry(
+            id=r["id"],
+            video_id=r["video_id"],
+            title=r["title"],
+            duration=r["duration"],
+            summary=r["summary"] or "",
+            relevance_score=r["relevance_score"],
+            is_flagged=bool(r["is_flagged"]),
+            is_marked_for_deletion=bool(r["is_marked_for_deletion"]),
+            youtube_url=r["youtube_url"],
+            batch_id=r.get("batch_id"),
+            was_previously_deleted=r["video_id"] in prev_deleted,
+        )
+        for r in rows
+    ]
+
+
+@app.post("/api/archive/{row_id}/flag")
+async def toggle_flag(row_id: int, flagged: bool = Query(...)):
+    found = await archive_db.set_flagged(row_id, flagged)
+    if not found:
+        raise HTTPException(status_code=404, detail="Transcript not found")
+    return {"id": row_id, "is_flagged": flagged}
+
+
+@app.post("/api/archive/{row_id}/mark_delete")
+async def toggle_mark_delete(row_id: int, marked: bool = Query(...)):
+    found = await archive_db.set_marked_for_deletion(row_id, marked)
+    if not found:
+        raise HTTPException(status_code=404, detail="Transcript not found")
+    return {"id": row_id, "is_marked_for_deletion": marked}
+
+
+# ── Archive routes ────────────────────────────────────────────────────────────
+
+
+@app.get("/api/archive")
+async def list_archive(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+) -> ArchiveListResponse:
+    items = await archive_db.list_transcripts(limit=limit, offset=offset)
+    total = await archive_db.count()
+    entries = [
+        ArchiveEntry(
+            **{k: v for k, v in item.items() if k not in ("audio_path",)},
+            has_audio=bool(item.get("audio_path")),
+        )
+        for item in items
+    ]
+    return ArchiveListResponse(items=entries, total=total)
+
+
+@app.get("/api/archive/{row_id}")
+async def get_archive_transcript(row_id: int) -> ArchiveTranscriptResponse:
+    record = await archive_db.get_transcript(row_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Archived transcript not found")
+    audio_url = None
+    if record.get("audio_path"):
+        audio_file = Path(settings.audio_dir).parent / record["audio_path"]
+        if audio_file.exists():
+            audio_url = f"/api/archive/{row_id}/audio"
+    return ArchiveTranscriptResponse(
+        id=record["id"],
+        video_id=record["video_id"],
+        title=record["title"],
+        duration=record["duration"],
+        youtube_url=record["youtube_url"],
+        full_text=record["full_text"],
+        segments=[TranscriptSegment(**s) for s in record["segments"]],
+        summary=record.get("summary"),
+        relevance_score=record.get("relevance_score"),
+        is_flagged=bool(record.get("is_flagged", 0)),
+        batch_id=record.get("batch_id"),
+        created_at=record["created_at"],
+        archived_at=record["archived_at"],
+        audio_url=audio_url,
+    )
+
+
+@app.get("/api/archive/{row_id}/audio")
+async def get_archive_audio(row_id: int):
+    record = await archive_db.get_transcript(row_id)
+    if not record or not record.get("audio_path"):
+        raise HTTPException(status_code=404, detail="Audio not available")
+    audio_file = Path(settings.audio_dir).parent / record["audio_path"]
+    if not audio_file.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    return FileResponse(audio_file, media_type="audio/ogg")
+
+
+class ArchiveScoreRequest(BaseModel):
+    criteria: str
+    ids: list[int]
+
+
+_score_running: set[str] = set()
+
+
+async def _run_score_archive(key: str, ids: list[int], criteria: str) -> None:
+    loop = asyncio.get_running_loop()
+    try:
+        rows = await archive_db.get_summaries_by_ids(ids)
+        log.info("Scoring %d transcripts against criteria: %s", len(rows), criteria)
+        for row in rows:
+            text = row["summary"] or row["full_text"][:1000]
+            if not text:
+                continue
+            try:
+                score = await loop.run_in_executor(
+                    None, llm.score_relevance, text, criteria
+                )
+                await archive_db.update_relevance_score(row["id"], score)
+            except Exception:
+                log.warning("Failed to score row %d", row["id"], exc_info=True)
+    finally:
+        _score_running.discard(key)
+    log.info("Archive scoring complete")
+
+
+@app.post("/api/archive/score", status_code=202)
+async def score_archive(req: ArchiveScoreRequest):
+    if not req.ids:
+        raise HTTPException(status_code=400, detail="No IDs provided")
+    if not req.criteria.strip():
+        raise HTTPException(status_code=400, detail="No criteria provided")
+    from .summarizer import NullLLM
+    if isinstance(llm, NullLLM):
+        raise HTTPException(status_code=400, detail="No LLM provider configured")
+    key = f"score-{hash(tuple(sorted(req.ids)))}"
+    if key in _score_running:
+        return {"status": "already_running", "count": len(req.ids)}
+    _score_running.add(key)
+    asyncio.create_task(_run_score_archive(key, req.ids, req.criteria))
+    return {"status": "started", "count": len(req.ids), "key": key}
+
+
+@app.get("/api/archive/score/status")
+async def score_archive_status():
+    return {"running": len(_score_running) > 0}
+
+
+@app.post("/api/archive/delete")
+async def delete_archive(req: ArchiveDeleteRequest) -> ArchiveDeleteResponse:
+    if not req.ids:
+        raise HTTPException(status_code=400, detail="No IDs provided")
+    deleted, audio_paths = await archive_db.delete_transcripts(req.ids)
+    for ap in audio_paths:
+        try:
+            (Path(settings.audio_dir).parent / ap).unlink(missing_ok=True)
+        except Exception:
+            log.warning("Failed to delete audio file: %s", ap)
+    return ArchiveDeleteResponse(deleted=deleted)
+
+
+# ── Health ────────────────────────────────────────────────────────────────────
+
+
+@app.get("/api/health")
+async def health():
+    return {"status": "ok", "llm_provider": settings.llm_provider}
+
+
+# ── Bookmarklet ───────────────────────────────────────────────────────────────
+
+_SOURCE_JS = PROJECT_DIR / "source.js"
+
+
+@app.get("/bookmarklet.js")
+async def serve_bookmarklet():
+    src = _SOURCE_JS.read_text()
+    js = src.replace("__SERVER__", settings.base_url.rstrip("/"))
+    return Response(content=js, media_type="application/javascript")
+
+
+# ── Static files (must be last) ───────────────────────────────────────────────
+
+app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
