@@ -342,3 +342,15 @@ class ArchiveDB:
         async with self._db.execute("SELECT video_id FROM transcripts") as cur:
             rows = await cur.fetchall()
         return {r[0] for r in rows}
+
+    async def get_archived_by_video_ids(self, video_ids: list[str]) -> set[str]:
+        """Return the subset of video_ids that are already archived."""
+        if not video_ids:
+            return set()
+        placeholders = ",".join("?" * len(video_ids))
+        async with self._db.execute(
+            f"SELECT video_id FROM transcripts WHERE video_id IN ({placeholders})",
+            video_ids,
+        ) as cur:
+            rows = await cur.fetchall()
+        return {r[0] for r in rows}

@@ -54,6 +54,7 @@ class BatchSubmitRequest(BaseModel):
 class BatchSubmitResponse(BaseModel):
     batch_id: str
     job_ids: list[str]
+    skipped: int = 0
 
 
 class JobStatusResponse(BaseModel):

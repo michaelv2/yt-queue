@@ -144,17 +144,24 @@ async def create_batch(req: BatchSubmitRequest) -> BatchSubmitResponse:
     seen: set[str] = set()
     unique_ids = [vid for vid in video_ids if not (vid in seen or seen.add(vid))]
 
+    # Skip videos already in the archive
+    already_archived = await archive_db.get_archived_by_video_ids(unique_ids)
+    new_ids = [vid for vid in unique_ids if vid not in already_archived]
+    skipped = len(already_archived)
+    if skipped:
+        log.info("Batch skipping %d already-archived video(s)", skipped)
+
     batch_id = batch_store.create(filter_criteria=req.filter_criteria)
     await archive_db.create_batch(batch_id, filter_criteria=req.filter_criteria)
 
     job_ids: list[str] = []
-    for video_id in unique_ids:
+    for video_id in new_ids:
         job = await store.create(video_id=video_id, batch_id=batch_id)
         batch_store.add_job(batch_id, job.id)
         job_ids.append(job.id)
         await runner.submit(job, filter_criteria=req.filter_criteria)
 
-    return BatchSubmitResponse(batch_id=batch_id, job_ids=job_ids)
+    return BatchSubmitResponse(batch_id=batch_id, job_ids=job_ids, skipped=skipped)
 
 
 @app.get("/api/batches/{batch_id}")

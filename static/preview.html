@@ -183,7 +183,12 @@
           throw new Error(err.detail || 'Submission failed');
         }
         const data = await resp.json();
-        location.href = `/triage.html?batch=${data.batch_id}`;
+        if (data.skipped > 0) {
+          status.textContent = `Skipped ${data.skipped} already-archived video(s). Redirecting…`;
+          await new Promise(r => setTimeout(r, 1500));
+        }
+        sessionStorage.setItem('ytqueue_active_batch', JSON.stringify({ batch_id: data.batch_id, criteria }));
+        location.href = '/';
       } catch (e) {
         status.textContent = 'Error: ' + e.message;
         btn.disabled = false;
