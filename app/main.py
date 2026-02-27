@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -82,7 +83,7 @@ async def lifespan(app: FastAPI):
     Path(settings.temp_dir).mkdir(parents=True, exist_ok=True)
     Path(settings.audio_dir).mkdir(parents=True, exist_ok=True)
     await archive_db.init()
-    cleanup_task = asyncio.create_task(cleanup_loop(store))
+    cleanup_task = asyncio.create_task(cleanup_loop(store, archive_db=archive_db))
     log.info(
         "yt-queue started — model=%s, device=%s, llm_provider=%s",
         settings.whisper_model,
@@ -201,6 +202,22 @@ async def get_batch_status(batch_id: str) -> BatchStatus:
         status=status,
         jobs=jobs,
     )
+
+
+# ── Job retry ─────────────────────────────────────────────────────────────────
+
+
+@app.post("/api/jobs/{job_id}/retry")
+async def retry_job(job_id: str):
+    job = await store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "failed":
+        raise HTTPException(status_code=409, detail=f"Job status is '{job.status}', not failed")
+    batch = batch_store.get(job.batch_id)
+    filter_criteria = batch["filter_criteria"] if batch else ""
+    await runner.retry(job, filter_criteria=filter_criteria)
+    return {"job_id": job_id, "status": "queued"}
 
 
 # ── Summarize route ───────────────────────────────────────────────────────────
@@ -418,14 +435,57 @@ async def health():
     return {"status": "ok", "llm_provider": settings.llm_provider}
 
 
+# ── Batch preview (dry run) ────────────────────────────────────────────────────
+
+_previews: dict[str, dict] = {}
+
+
+@app.post("/api/batches/preview")
+async def preview_batch(req: BatchSubmitRequest):
+    urls = parse_urls(req.urls)
+    video_ids: list[str] = []
+    errors: list[str] = []
+    for url in urls:
+        try:
+            video_ids.append(extract_video_id(url))
+        except ValueError as e:
+            errors.append(str(e))
+    seen: set[str] = set()
+    unique_ids = [vid for vid in video_ids if not (vid in seen or seen.add(vid))]
+    preview_id = uuid.uuid4().hex[:16]
+    _previews[preview_id] = {
+        "count": len(unique_ids),
+        "duplicates": len(video_ids) - len(unique_ids),
+        "video_ids": unique_ids,
+        "errors": errors,
+    }
+    return {"preview_id": preview_id}
+
+
+@app.get("/api/batches/preview/{preview_id}")
+async def get_preview(preview_id: str):
+    data = _previews.get(preview_id)
+    if not data:
+        raise HTTPException(status_code=404, detail="Preview not found or expired")
+    return data
+
+
 # ── Bookmarklet ───────────────────────────────────────────────────────────────
 
 _SOURCE_JS = PROJECT_DIR / "source.js"
+_SOURCE_TEST_JS = PROJECT_DIR / "source-test.js"
 
 
 @app.get("/bookmarklet.js")
 async def serve_bookmarklet():
     src = _SOURCE_JS.read_text()
+    js = src.replace("__SERVER__", settings.base_url.rstrip("/"))
+    return Response(content=js, media_type="application/javascript")
+
+
+@app.get("/bookmarklet-test.js")
+async def serve_bookmarklet_test():
+    src = _SOURCE_TEST_JS.read_text()
     js = src.replace("__SERVER__", settings.base_url.rstrip("/"))
     return Response(content=js, media_type="application/javascript")
 

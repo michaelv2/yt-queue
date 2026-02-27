@@ -73,6 +73,7 @@ function renderTable() {
   document.querySelectorAll('.transcript-btn').forEach(btn => {
     btn.addEventListener('click', () => openTranscriptModal(parseInt(btn.dataset.id)));
   });
+  updateDeleteBtn();
 }
 
 function initSortHeaders() {

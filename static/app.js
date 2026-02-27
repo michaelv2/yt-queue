@@ -95,6 +95,7 @@ function renderBatch(batch) {
         <span class="job-status-badge">${job.status}</span>
         <span class="job-title">${esc(job.title || job.video_id)}</span>
         ${job.duration ? `<span class="job-duration">${fmtDuration(job.duration)}</span>` : ''}
+        ${job.status === 'failed' ? `<button class="retry-btn" data-job-id="${esc(job.id)}">↺ Retry</button>` : ''}
       </div>
       <div class="job-progress-bar-wrap">
         <div class="job-progress-bar" style="width:${Math.round(job.progress * 100)}%"></div>
@@ -102,6 +103,10 @@ function renderBatch(batch) {
       ${job.error ? `<div class="job-error">${esc(job.error)}</div>` : ''}
     </div>
   `).join('');
+
+  list.querySelectorAll('.retry-btn').forEach(btn => {
+    btn.addEventListener('click', () => retryJob(btn.dataset.jobId));
+  });
 }
 
 function showTriageLink(batchId, status) {
@@ -126,45 +131,75 @@ if (saved) {
   }
 }
 
+// ── Retry ─────────────────────────────────────────────────────────────────────
+
+async function retryJob(jobId) {
+  try {
+    const resp = await fetch(`/api/jobs/${jobId}/retry`, { method: 'POST' });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || 'Retry failed');
+    }
+  } catch (e) {
+    alert('Retry error: ' + e.message);
+  }
+}
+
 // ── History ───────────────────────────────────────────────────────────────────
+
+let _batches = [];
 
 async function loadHistory() {
   try {
     const resp = await fetch('/api/batches?limit=10');
     if (!resp.ok) return;
-    const batches = await resp.json();
-    const list = document.getElementById('history-list');
-    if (!batches || batches.length === 0) {
-      list.innerHTML = '<p class="empty">No archived transcripts yet.</p>';
-      return;
-    }
-    list.innerHTML = batches.map(b => `
-      <div class="history-batch">
-        <div class="history-batch-header">
-          <a href="/triage.html?batch=${esc(b.id)}" class="batch-id">${esc(b.id)}</a>
-          <span class="history-count">${b.count} video${b.count !== 1 ? 's' : ''}</span>
-        </div>
-        <ul class="history-items">
-          ${b.sample_titles.map(t => `<li>${esc(t)}</li>`).join('')}
-          ${b.count > b.sample_titles.length ? `<li class="more">+${b.count - b.sample_titles.length} more</li>` : ''}
-        </ul>
-      </div>
-    `).join('');
+    _batches = await resp.json();
+    renderHistory();
   } catch (e) {
     console.warn('History load error:', e);
   }
 }
+
+function renderHistory() {
+  const list = document.getElementById('history-list');
+  const hideEmpty = document.getElementById('hide-empty-batches').checked;
+  const batches = hideEmpty ? _batches.filter(b => b.count > 0) : _batches;
+
+  if (!batches || batches.length === 0) {
+    list.innerHTML = '<p class="empty">No batches yet.</p>';
+    return;
+  }
+  list.innerHTML = batches.map(b => `
+    <div class="history-batch">
+      <div class="history-batch-header">
+        <a href="/triage.html?batch=${esc(b.id)}" class="batch-id">${esc(b.id)}</a>
+        <span class="history-count">${b.count} video${b.count !== 1 ? 's' : ''}</span>
+      </div>
+      <ul class="history-items">
+        ${b.sample_titles.map(t => `<li>${esc(t)}</li>`).join('')}
+        ${b.count > b.sample_titles.length ? `<li class="more">+${b.count - b.sample_titles.length} more</li>` : ''}
+      </ul>
+    </div>
+  `).join('');
+}
+
+document.getElementById('hide-empty-batches').addEventListener('change', renderHistory);
 
 loadHistory();
 loadBookmarklet();
 
 async function loadBookmarklet() {
   try {
-    const resp = await fetch('/bookmarklet.js');
-    if (!resp.ok) return;
-    const js = await resp.text();
-    const link = document.getElementById('bookmarklet-link');
-    link.href = 'javascript:' + js;
+    const [prod, test] = await Promise.all([
+      fetch('/bookmarklet.js'),
+      fetch('/bookmarklet-test.js'),
+    ]);
+    if (prod.ok) {
+      document.getElementById('bookmarklet-link').href = 'javascript:' + await prod.text();
+    }
+    if (test.ok) {
+      document.getElementById('bookmarklet-test-link').href = 'javascript:' + await test.text();
+    }
   } catch (e) {
     console.warn('Bookmarklet load error:', e);
   }

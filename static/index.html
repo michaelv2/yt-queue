@@ -47,12 +47,19 @@
       <p class="bookmarklet-desc">Drag this to your bookmarks bar, then click it on any YouTube playlist page to send all videos to yt-queue.</p>
       <div class="bookmarklet-row">
         <a id="bookmarklet-link" href="#" class="bookmarklet-drag" title="Drag to bookmarks bar">⭐ yt-queue Playlist</a>
-        <span class="bookmarklet-hint">← drag to bookmarks bar</span>
+        <a id="bookmarklet-test-link" href="#" class="bookmarklet-drag bookmarklet-test" title="Drag to bookmarks bar — dry run only">🔍 yt-queue Preview</a>
+        <span class="bookmarklet-hint">← drag both to bookmarks bar</span>
       </div>
     </details>
 
     <section id="history-section">
-      <h2>Recent batches</h2>
+      <div class="history-header">
+        <h2>Recent batches</h2>
+        <label class="toggle-label">
+          <input type="checkbox" id="hide-empty-batches" checked>
+          Hide empty batches
+        </label>
+      </div>
       <div id="history-list" class="history-list"></div>
     </section>
   </main>

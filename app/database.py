@@ -336,3 +336,9 @@ class ArchiveDB:
         async with self._db.execute("SELECT COUNT(*) FROM transcripts") as cur:
             row = await cur.fetchone()
         return row[0]
+
+    async def get_archived_video_ids(self) -> set[str]:
+        """Return the set of video_ids that have an archived transcript."""
+        async with self._db.execute("SELECT video_id FROM transcripts") as cur:
+            rows = await cur.fetchall()
+        return {r[0] for r in rows}

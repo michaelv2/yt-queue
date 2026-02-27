@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>yt-queue — Batch Preview</title>
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    .preview-stats {
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+      margin-bottom: 24px;
+    }
+    .stat-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px 24px;
+      text-align: center;
+      min-width: 120px;
+    }
+    .stat-box .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+      color: var(--accent);
+      line-height: 1.1;
+    }
+    .stat-box .stat-label {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    .stat-box.warn .stat-value { color: var(--warn); }
+
+    .preview-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+    }
+    .criteria-field {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      max-width: 480px;
+    }
+    .criteria-field label { font-size: 0.85rem; color: var(--text-muted); white-space: nowrap; }
+    .criteria-field input { flex: 1; padding: 7px 10px; font-size: 0.85rem; }
+
+    .submit-batch-btn {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: var(--radius);
+      padding: 9px 20px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .submit-batch-btn:hover:not(:disabled) { background: var(--accent-hover); }
+    .submit-batch-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .submit-status { font-size: 0.85rem; color: var(--text-muted); }
+
+    .thumb-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 12px;
+    }
+    .thumb-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .thumb-item img {
+      width: 100%;
+      aspect-ratio: 16/9;
+      object-fit: cover;
+      display: block;
+      background: var(--surface2);
+    }
+    .thumb-item .thumb-id {
+      font-size: 0.7rem;
+      font-family: monospace;
+      color: var(--text-muted);
+      padding: 5px 8px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>yt-queue <span class="subtitle">Batch Preview</span></h1>
+    <nav>
+      <a href="/">Submit</a>
+      <a href="/archive.html">Archive</a>
+    </nav>
+  </header>
+
+  <main>
+    <div id="preview-content">
+      <p class="empty error">No video IDs found in URL.</p>
+    </div>
+  </main>
+
+  <script>
+    'use strict';
+
+    function render(videoIds) {
+      // Deduplicate
+      const seen = new Set();
+      const unique = [];
+      let dupes = 0;
+      for (const id of videoIds) {
+        if (seen.has(id)) { dupes++; continue; }
+        seen.add(id);
+        unique.push(id);
+      }
+
+      document.getElementById('preview-content').innerHTML = `
+        <div class="preview-stats">
+          <div class="stat-box">
+            <div class="stat-value">${unique.length}</div>
+            <div class="stat-label">videos found</div>
+          </div>
+          ${dupes > 0 ? `
+          <div class="stat-box warn">
+            <div class="stat-value">${dupes}</div>
+            <div class="stat-label">duplicates removed</div>
+          </div>` : ''}
+        </div>
+
+        <div class="preview-actions">
+          <div class="criteria-field">
+            <label for="criteria-input">Filter criteria:</label>
+            <input type="text" id="criteria-input"
+                   placeholder="e.g. Python tutorials about async">
+          </div>
+          <button class="submit-batch-btn" id="submit-btn">Submit batch →</button>
+          <span class="submit-status hidden" id="submit-status"></span>
+        </div>
+
+        <div class="thumb-grid">
+          ${unique.map(id => `
+            <div class="thumb-item" title="${esc(id)}">
+              <a href="https://www.youtube.com/watch?v=${esc(id)}"
+                 target="_blank" rel="noopener">
+                <img src="https://img.youtube.com/vi/${esc(id)}/mqdefault.jpg"
+                     alt="${esc(id)}" loading="lazy">
+              </a>
+              <div class="thumb-id">${esc(id)}</div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+
+      document.getElementById('submit-btn').addEventListener('click', () => submit(unique));
+    }
+
+    async function submit(videoIds) {
+      const criteria = document.getElementById('criteria-input').value.trim();
+      const btn = document.getElementById('submit-btn');
+      const status = document.getElementById('submit-status');
+      btn.disabled = true;
+      status.textContent = 'Submitting…';
+      status.classList.remove('hidden');
+
+      const urls = videoIds.map(id => `https://www.youtube.com/watch?v=${id}`);
+      try {
+        const resp = await fetch('/api/batches', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls, filter_criteria: criteria }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json();
+          throw new Error(err.detail || 'Submission failed');
+        }
+        const data = await resp.json();
+        location.href = `/triage.html?batch=${data.batch_id}`;
+      } catch (e) {
+        status.textContent = 'Error: ' + e.message;
+        btn.disabled = false;
+      }
+    }
+
+    // Read video IDs from URL param (?ids=id1,id2,...)
+    const params = new URLSearchParams(location.search);
+    const idsParam = params.get('ids');
+    if (idsParam) {
+      render(idsParam.split(',').filter(Boolean));
+    }
+
+    function esc(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+  </script>
+</body>
+</html>

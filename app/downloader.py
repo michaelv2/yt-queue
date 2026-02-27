@@ -23,6 +23,15 @@ def _find_ffmpeg() -> str | None:
         return None
 
 
+def fetch_info(video_id: str) -> dict:
+    """Fetch title and duration without downloading."""
+    import yt_dlp
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+    return {"title": info.get("title", video_id), "duration": float(info.get("duration") or 0)}
+
+
 def download_audio(video_id: str, output_dir: Path) -> tuple[Path, str, float]:
     """Download audio for a YouTube video.
 

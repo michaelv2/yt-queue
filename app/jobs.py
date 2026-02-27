@@ -97,24 +97,69 @@ class JobRunner:
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    async def retry(self, job: Job, filter_criteria: str = "") -> None:
+        """Re-queue a failed job. Skips download if the OGG is already cached."""
+        job.status = JobStatus.queued
+        job.error = None
+        job.progress = 0.0
+        await self.store.update(job)
+        asyncio.create_task(self._run(job, filter_criteria))
+
     async def _pipeline(self, job: Job, tmp_dir: Path, filter_criteria: str) -> None:
         import json
         from . import downloader, transcriber
+        from .downloader import _find_ffmpeg
 
         loop = asyncio.get_running_loop()
+        audio_dir = Path(settings.audio_dir)
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        ogg_file = audio_dir / f"{job.video_id}.ogg"
 
-        # Phase 1: Download
-        job.status = JobStatus.downloading
-        job.progress = 0.1
-        await self.store.update(job)
+        # Phase 1: Download — skip if a cached OGG already exists
+        if ogg_file.exists():
+            log.info("Job %s: cached audio found at %s, skipping download", job.id, ogg_file)
+            if not job.title or not job.duration:
+                job.status = JobStatus.downloading
+                job.progress = 0.05
+                await self.store.update(job)
+                info = await loop.run_in_executor(None, downloader.fetch_info, job.video_id)
+                job.title = info["title"]
+                job.duration = info["duration"]
+            transcribe_path = ogg_file
+            job.progress = 0.35
+            await self.store.update(job)
+        else:
+            job.status = JobStatus.downloading
+            job.progress = 0.1
+            await self.store.update(job)
 
-        audio_path, title, duration = await loop.run_in_executor(
-            None, downloader.download_audio, job.video_id, tmp_dir
-        )
-        job.title = title
-        job.duration = duration
-        job.progress = 0.35
-        await self.store.update(job)
+            wav_path, title, duration = await loop.run_in_executor(
+                None, downloader.download_audio, job.video_id, tmp_dir
+            )
+            job.title = title
+            job.duration = duration
+            job.progress = 0.25
+            await self.store.update(job)
+
+            # Encode WAV → OGG immediately so audio survives a transcription failure
+            try:
+                ffmpeg_bin = _find_ffmpeg() or "ffmpeg"
+                await loop.run_in_executor(
+                    None,
+                    lambda: subprocess.run(
+                        [ffmpeg_bin, "-y", "-i", str(wav_path),
+                         "-c:a", "libopus", "-b:a", "96k", str(ogg_file)],
+                        check=True, capture_output=True,
+                    ),
+                )
+                log.info("Job %s: audio pre-cached → %s", job.id, ogg_file)
+                transcribe_path = ogg_file
+            except Exception:
+                log.warning("Job %s: OGG pre-cache failed, falling back to WAV", job.id, exc_info=True)
+                transcribe_path = wav_path
+
+            job.progress = 0.35
+            await self.store.update(job)
 
         # Phase 2: Transcribe
         job.status = JobStatus.transcribing
@@ -122,7 +167,7 @@ class JobRunner:
         await self.store.update(job)
 
         segments = await loop.run_in_executor(
-            None, transcriber.transcribe, audio_path
+            None, transcriber.transcribe, transcribe_path
         )
         job.segments = segments
         job.progress = 0.7
@@ -164,27 +209,7 @@ class JobRunner:
         await self.store.update(job)
         log.info("Job %s completed: %d segments", job.id, len(segments))
 
-        # Phase 5: Convert WAV → OGG Opus (non-fatal)
-        saved_audio_path: str | None = None
-        try:
-            from .downloader import _find_ffmpeg
-            ffmpeg_bin = _find_ffmpeg() or "ffmpeg"
-            audio_dir = Path(settings.audio_dir)
-            audio_dir.mkdir(parents=True, exist_ok=True)
-            ogg_file = audio_dir / f"{job.video_id}.ogg"
-            await loop.run_in_executor(
-                None,
-                lambda: subprocess.run(
-                    [ffmpeg_bin, "-y", "-i", str(audio_path), "-c:a", "libopus", "-b:a", "96k", str(ogg_file)],
-                    check=True, capture_output=True,
-                ),
-            )
-            saved_audio_path = f"audio/{job.video_id}.ogg"
-            log.info("Job %s audio saved: %s", job.id, ogg_file)
-        except Exception:
-            log.warning("Failed to save audio for job %s", job.id, exc_info=True)
-
-        # Phase 6: Archive to SQLite (non-fatal)
+        # Phase 5: Archive to SQLite (non-fatal)
         if self.archive_db is not None:
             try:
                 segments_json = json.dumps(
@@ -198,7 +223,7 @@ class JobRunner:
                     full_text=full_text,
                     segments_json=segments_json,
                     created_at=job.created_at,
-                    audio_path=saved_audio_path,
+                    audio_path=f"audio/{job.video_id}.ogg" if ogg_file.exists() else None,
                     summary=summary,
                     relevance_score=relevance_score,
                     batch_id=job.batch_id,
@@ -208,10 +233,29 @@ class JobRunner:
                 log.warning("Failed to archive job %s to DB", job.id, exc_info=True)
 
 
-async def cleanup_loop(store: JobStore, interval: float = 300) -> None:
-    """Periodically remove expired jobs."""
+async def cleanup_loop(store: JobStore, archive_db=None, interval: float = 300) -> None:
+    """Periodically remove expired jobs and orphaned audio files."""
     while True:
         await asyncio.sleep(interval)
         removed = await store.cleanup_expired()
         if removed:
             log.info("Cleaned up %d expired jobs", removed)
+
+        # Delete OGG files that have no DB record and no active job,
+        # and are older than job_ttl_seconds (i.e. not from a recent failure).
+        if archive_db is not None:
+            try:
+                audio_dir = Path(settings.audio_dir)
+                if not audio_dir.exists():
+                    continue
+                archived_ids = await archive_db.get_archived_video_ids()
+                active_ids = {j.video_id for j in store._jobs.values()}
+                now = time.time()
+                for ogg in audio_dir.glob("*.ogg"):
+                    vid = ogg.stem
+                    if vid not in archived_ids and vid not in active_ids:
+                        if now - ogg.stat().st_mtime > settings.job_ttl_seconds:
+                            ogg.unlink(missing_ok=True)
+                            log.info("Deleted orphaned audio: %s", ogg.name)
+            except Exception:
+                log.warning("Orphaned audio cleanup failed", exc_info=True)
