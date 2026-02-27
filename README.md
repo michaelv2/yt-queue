@@ -15,7 +15,7 @@ YouTube's own tools are terrible for bulk playlist management. yt-queue lets you
 - **Archive** — searchable, sortable, paginated table with category filter, bulk delete, and per-video transcript/audio access
 - **Multi-GPU** — configurable device pool distributes concurrent jobs across GPUs
 
-<img width="1900*.85" height="1774*.85" alt="Screenshot 2026-02-27 140023" src="https://github.com/user-attachments/assets/75275bc4-d73c-4c85-8d29-a83374c3679d" />
+<img width="1900" height="1774" alt="Screenshot 2026-02-27 140023" src="https://github.com/user-attachments/assets/75275bc4-d73c-4c85-8d29-a83374c3679d" />
 
 ---
 
