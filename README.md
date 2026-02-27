@@ -1,6 +1,6 @@
 # yt-queue
 
-The smarter way to browse: self-hosted YouTube playlist manager with Whisper transcription, LLM summarization, and triage UI.
+Self-hosted YouTube playlist manager with Whisper transcription, LLM summarization, and triage UI -- the smarter way to browse.
 
 YouTube's own tools are terrible for bulk playlist management. yt-queue lets you ingest an entire playlist via bookmarklet, transcribe every video locally with Whisper, summarize and score them with an LLM, then triage — keep, flag, or delete — from a clean interface. Re-ingesting the same playlist is safe; already-transcribed videos are skipped automatically.
 
