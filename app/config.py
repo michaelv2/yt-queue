@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     base_url: str = "http://localhost:8000"
     whisper_model: str = "base"
     whisper_device: str = "auto"
+    whisper_devices: str = ""   # e.g. "cuda:0,cuda:1" — overrides whisper_device, one slot per GPU
     whisper_compute_type: str = "auto"
     max_concurrent_jobs: int = 2
     max_duration_seconds: int = 7200

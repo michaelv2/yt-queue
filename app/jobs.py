@@ -79,23 +79,36 @@ class JobRunner:
         self.batch_store = batch_store
         self.archive_db = archive_db
         self.llm = llm
-        self._semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
+
+        # Build device pool — one slot per GPU (multi-GPU) or N slots for one device (single)
+        if settings.whisper_devices:
+            devices = [d.strip() for d in settings.whisper_devices.split(",") if d.strip()]
+        else:
+            devices = [settings.whisper_device] * settings.max_concurrent_jobs
+        self._device_pool: asyncio.Queue[str] = asyncio.Queue()
+        for d in devices:
+            self._device_pool.put_nowait(d)
+        log.info(
+            "JobRunner device pool: %s",
+            devices if len(set(devices)) > 1 else f"{devices[0]} ×{len(devices)}",
+        )
 
     async def submit(self, job: Job, filter_criteria: str = "") -> None:
         asyncio.create_task(self._run(job, filter_criteria))
 
     async def _run(self, job: Job, filter_criteria: str = "") -> None:
-        async with self._semaphore:
-            tmp_dir = Path(tempfile.mkdtemp(prefix="ytqueue_", dir=settings.temp_dir))
-            try:
-                await self._pipeline(job, tmp_dir, filter_criteria)
-            except Exception as exc:
-                log.exception("Job %s failed: %s", job.id, exc)
-                job.status = JobStatus.failed
-                job.error = str(exc)
-                await self.store.update(job)
-            finally:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
+        device = await self._device_pool.get()
+        tmp_dir = Path(tempfile.mkdtemp(prefix="ytqueue_", dir=settings.temp_dir))
+        try:
+            await self._pipeline(job, tmp_dir, filter_criteria, device=device)
+        except Exception as exc:
+            log.exception("Job %s failed: %s", job.id, exc)
+            job.status = JobStatus.failed
+            job.error = str(exc)
+            await self.store.update(job)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            self._device_pool.put_nowait(device)
 
     async def retry(self, job: Job, filter_criteria: str = "") -> None:
         """Re-queue a failed job. Skips download if the OGG is already cached."""
@@ -105,7 +118,7 @@ class JobRunner:
         await self.store.update(job)
         asyncio.create_task(self._run(job, filter_criteria))
 
-    async def _pipeline(self, job: Job, tmp_dir: Path, filter_criteria: str) -> None:
+    async def _pipeline(self, job: Job, tmp_dir: Path, filter_criteria: str, device: str = "auto") -> None:
         import json
         from . import downloader, transcriber
         from .downloader import _find_ffmpeg
@@ -167,7 +180,7 @@ class JobRunner:
         await self.store.update(job)
 
         segments = await loop.run_in_executor(
-            None, transcriber.transcribe, transcribe_path
+            None, transcriber.transcribe, transcribe_path, device
         )
         job.segments = segments
         job.progress = 0.7

@@ -6,9 +6,12 @@ let _total = 0;
 let _items = [];
 let _sortCol = 'archived_at';
 let _sortDir = 'desc';
+let _categoryFilter = '';
 
 async function loadArchive(offset = 0) {
-  const resp = await fetch(`/api/archive?limit=${PAGE_SIZE}&offset=${offset}`);
+  const params = new URLSearchParams({ limit: PAGE_SIZE, offset });
+  if (_categoryFilter) params.set('category', _categoryFilter);
+  const resp = await fetch(`/api/archive?${params}`);
   if (!resp.ok) return;
   const data = await resp.json();
   _total = data.total;
@@ -43,7 +46,7 @@ function renderTable() {
 
   const body = document.getElementById('archive-body');
   if (items.length === 0) {
-    body.innerHTML = '<tr><td colspan="7" class="empty">No archived transcripts.</td></tr>';
+    body.innerHTML = '<tr><td colspan="8" class="empty">No archived transcripts.</td></tr>';
     return;
   }
   body.innerHTML = items.map(item => `
@@ -57,6 +60,7 @@ function renderTable() {
       </td>
       <td>${item.duration ? fmtDuration(item.duration) : '—'}</td>
       <td class="summary-cell">${esc(item.summary || '')}</td>
+      <td>${item.category ? `<span class="category-badge">${esc(item.category)}</span>` : '<span class="category-none">—</span>'}</td>
       <td>${item.relevance_score !== null && item.relevance_score !== undefined ? Math.round(item.relevance_score * 100) + '%' : '—'}</td>
       <td>${item.batch_id ? `<a href="/triage.html?batch=${esc(item.batch_id)}">${esc(item.batch_id.slice(0, 8))}…</a>` : '—'}</td>
       <td>${new Date(item.archived_at * 1000).toLocaleDateString()}</td>
@@ -269,6 +273,7 @@ function pollScoreStatus() {
 initSortHeaders();
 restoreScoreCriteria();
 loadArchive();
+loadCategories();
 
 function restoreScoreCriteria() {
   const saved = localStorage.getItem('ytqueue_score_criteria');
@@ -281,4 +286,96 @@ function restoreScoreCriteria() {
 function updateScoreCriteriaLabel(criteria) {
   const el = document.getElementById('score-criteria-label');
   if (el) el.textContent = criteria ? `"${criteria}"` : '';
+}
+
+// ── Categories ────────────────────────────────────────────────────────────────
+
+async function loadCategories() {
+  try {
+    const resp = await fetch('/api/categories');
+    if (!resp.ok) return;
+    const cats = await resp.json();
+    populateCategoryFilter(cats);
+  } catch (e) {
+    console.warn('Category load error:', e);
+  }
+}
+
+function populateCategoryFilter(cats) {
+  const sel = document.getElementById('category-filter');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All categories</option>';
+  if (cats.length > 0) {
+    cats.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.name;
+      opt.textContent = c.name;
+      sel.appendChild(opt);
+    });
+    const none = document.createElement('option');
+    none.value = '_none_';
+    none.textContent = 'Uncategorized';
+    sel.appendChild(none);
+  }
+  if (current) sel.value = current;
+}
+
+document.getElementById('category-filter').addEventListener('change', (e) => {
+  _categoryFilter = e.target.value;
+  loadArchive(0);
+});
+
+let _categorizeTimer = null;
+
+document.getElementById('categorize-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('categorize-btn');
+  const status = document.getElementById('categorize-status');
+  btn.disabled = true;
+  status.textContent = 'Starting…';
+  status.classList.remove('hidden');
+  try {
+    const resp = await fetch('/api/categories/generate', { method: 'POST' });
+    if (!resp.ok) {
+      const err = await resp.json();
+      throw new Error(err.detail || 'Failed to start');
+    }
+    pollCategorizeStatus();
+  } catch (e) {
+    status.textContent = 'Error: ' + e.message;
+    btn.disabled = false;
+  }
+});
+
+function pollCategorizeStatus() {
+  if (_categorizeTimer) clearInterval(_categorizeTimer);
+  _categorizeTimer = setInterval(async () => {
+    try {
+      const resp = await fetch('/api/categories/status');
+      const data = await resp.json();
+      const status = document.getElementById('categorize-status');
+      if (data.error) {
+        clearInterval(_categorizeTimer);
+        _categorizeTimer = null;
+        status.textContent = 'Error: ' + data.error;
+        document.getElementById('categorize-btn').disabled = false;
+        return;
+      }
+      if (data.running) {
+        const pct = data.total > 0 ? Math.round(data.done / data.total * 100) : 0;
+        status.textContent = data.done === 0
+          ? 'Deriving taxonomy…'
+          : `Assigning: ${data.done}/${data.total} (${pct}%)`;
+      } else {
+        clearInterval(_categorizeTimer);
+        _categorizeTimer = null;
+        status.textContent = 'Done';
+        setTimeout(() => status.classList.add('hidden'), 3000);
+        document.getElementById('categorize-btn').disabled = false;
+        await loadCategories();
+        loadArchive(_offset);
+      }
+    } catch (e) {
+      console.warn('Categorize poll error:', e);
+    }
+  }, 2500);
 }

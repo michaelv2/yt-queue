@@ -35,14 +35,14 @@ def get_model(
     return _models[key]
 
 
-def transcribe(audio_path: Path, model=None) -> list[TranscriptSegment]:
+def transcribe(audio_path: Path, device: str | None = None, model=None) -> list[TranscriptSegment]:
     """Transcribe an audio file and return timestamped segments.
 
     Uses VAD to skip silence (prevents hallucination loops on long audio)
     and filters known YouTube training-data artifacts.
     """
     if model is None:
-        model = get_model()
+        model = get_model(device=device)
 
     segments_iter, info = model.transcribe(
         str(audio_path),

@@ -7,12 +7,37 @@ import logging
 log = logging.getLogger(__name__)
 
 
+def _extract_json(text: str):
+    """Try to parse JSON from LLM output, tolerating surrounding prose."""
+    import json
+    import re
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    m = re.search(r'(\[.*\]|\{.*\})', text, re.DOTALL)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            pass
+    return None
+
+
 class BaseLLM:
     def summarize(self, transcript: str, max_words: int = 80) -> str:
         raise NotImplementedError
 
     def score_relevance(self, summary: str, criteria: str) -> float:
         """Return 0.0–1.0; 1.0 = highly relevant."""
+        raise NotImplementedError
+
+    def derive_taxonomy(self, summaries: list[str], n: int = 12) -> list[dict]:
+        """Return a list of {name, description} category dicts."""
+        raise NotImplementedError
+
+    def assign_categories_bulk(self, videos: list[dict], category_names: list[str]) -> dict[int, str]:
+        """Return {transcript_id: category_name} for a batch of videos."""
         raise NotImplementedError
 
 
@@ -24,6 +49,12 @@ class NullLLM(BaseLLM):
 
     def score_relevance(self, summary: str, criteria: str) -> float:
         return 0.0
+
+    def derive_taxonomy(self, summaries: list[str], n: int = 12) -> list[dict]:
+        return []
+
+    def assign_categories_bulk(self, videos: list[dict], category_names: list[str]) -> dict[int, str]:
+        return {}
 
 
 class AnthropicLLM(BaseLLM):
@@ -68,6 +99,55 @@ class AnthropicLLM(BaseLLM):
         except Exception as e:
             log.warning("AnthropicLLM.score_relevance failed: %s", e)
             return 0.0
+
+    def derive_taxonomy(self, summaries: list[str], n: int = 12) -> list[dict]:
+        sample = "\n\n".join(f"- {s}" for s in summaries[:150])
+        prompt = (
+            f"Here are summaries of YouTube videos in a personal library.\n\n{sample}\n\n"
+            f"Derive exactly {n} category names covering all content types present. "
+            f'Return only a JSON array: [{{"name": "...", "description": "one sentence"}}, ...]. No other text.'
+        )
+        try:
+            msg = self._client.messages.create(
+                model=self._model, max_tokens=800,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            data = _extract_json(msg.content[0].text.strip())
+            if isinstance(data, list):
+                return [{"name": d["name"], "description": d.get("description", "")} for d in data if "name" in d]
+        except Exception as e:
+            log.warning("AnthropicLLM.derive_taxonomy failed: %s", e)
+        return []
+
+    def assign_categories_bulk(self, videos: list[dict], category_names: list[str]) -> dict[int, str]:
+        cats = ", ".join(f'"{c}"' for c in category_names)
+        items = "\n".join(
+            f'{v["id"]}: {v["title"]} — {(v.get("summary") or "")[:120]}' for v in videos
+        )
+        prompt = (
+            f"Categories: [{cats}]\n\nVideos (id: title — summary):\n{items}\n\n"
+            "Assign each video to its best category. "
+            'Return only JSON: {"id": "category", ...}. Use exact category names. No other text.'
+        )
+        try:
+            msg = self._client.messages.create(
+                model=self._model, max_tokens=800,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            data = _extract_json(msg.content[0].text.strip())
+            if isinstance(data, dict):
+                valid = set(category_names)
+                result = {}
+                for k, v in data.items():
+                    try:
+                        if v in valid:
+                            result[int(k)] = v
+                    except (ValueError, TypeError):
+                        pass
+                return result
+        except Exception as e:
+            log.warning("AnthropicLLM.assign_categories_bulk failed: %s", e)
+        return {}
 
 
 class OpenAILLM(BaseLLM):
@@ -115,6 +195,55 @@ class OpenAILLM(BaseLLM):
         except Exception as e:
             log.warning("OpenAILLM.score_relevance failed: %s", e)
             return 0.0
+
+    def derive_taxonomy(self, summaries: list[str], n: int = 12) -> list[dict]:
+        sample = "\n\n".join(f"- {s}" for s in summaries[:150])
+        prompt = (
+            f"Here are summaries of YouTube videos in a personal library.\n\n{sample}\n\n"
+            f"Derive exactly {n} category names covering all content types present. "
+            f'Return only a JSON array: [{{"name": "...", "description": "one sentence"}}, ...]. No other text.'
+        )
+        try:
+            resp = self._client.chat.completions.create(
+                model=self._model, max_tokens=800,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            data = _extract_json(resp.choices[0].message.content.strip())
+            if isinstance(data, list):
+                return [{"name": d["name"], "description": d.get("description", "")} for d in data if "name" in d]
+        except Exception as e:
+            log.warning("OpenAILLM.derive_taxonomy failed: %s", e)
+        return []
+
+    def assign_categories_bulk(self, videos: list[dict], category_names: list[str]) -> dict[int, str]:
+        cats = ", ".join(f'"{c}"' for c in category_names)
+        items = "\n".join(
+            f'{v["id"]}: {v["title"]} — {(v.get("summary") or "")[:120]}' for v in videos
+        )
+        prompt = (
+            f"Categories: [{cats}]\n\nVideos (id: title — summary):\n{items}\n\n"
+            "Assign each video to its best category. "
+            'Return only JSON: {"id": "category", ...}. Use exact category names. No other text.'
+        )
+        try:
+            resp = self._client.chat.completions.create(
+                model=self._model, max_tokens=800,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            data = _extract_json(resp.choices[0].message.content.strip())
+            if isinstance(data, dict):
+                valid = set(category_names)
+                result = {}
+                for k, v in data.items():
+                    try:
+                        if v in valid:
+                            result[int(k)] = v
+                    except (ValueError, TypeError):
+                        pass
+                return result
+        except Exception as e:
+            log.warning("OpenAILLM.assign_categories_bulk failed: %s", e)
+        return {}
 
 
 def _strip_think_tags(text: str) -> str:
@@ -185,6 +314,49 @@ class OllamaLLM(BaseLLM):
         except Exception as e:
             log.warning("OllamaLLM.score_relevance failed: %s", e)
             return 0.0
+
+    def derive_taxonomy(self, summaries: list[str], n: int = 12) -> list[dict]:
+        sample = "\n\n".join(f"- {s}" for s in summaries[:150])
+        user = (
+            f"Here are summaries of YouTube videos in a personal library.\n\n{sample}\n\n"
+            f"Derive exactly {n} category names covering all content types present. "
+            f'Return only a JSON array: [{{"name": "...", "description": "one sentence"}}, ...]. No other text.'
+        )
+        try:
+            raw = self._chat(self._SYSTEM, user, max_tokens=800)
+            data = _extract_json(raw)
+            if isinstance(data, list):
+                return [{"name": d["name"], "description": d.get("description", "")} for d in data if "name" in d]
+        except Exception as e:
+            log.warning("OllamaLLM.derive_taxonomy failed: %s", e)
+        return []
+
+    def assign_categories_bulk(self, videos: list[dict], category_names: list[str]) -> dict[int, str]:
+        cats = ", ".join(f'"{c}"' for c in category_names)
+        items = "\n".join(
+            f'{v["id"]}: {v["title"]} — {(v.get("summary") or "")[:120]}' for v in videos
+        )
+        user = (
+            f"Categories: [{cats}]\n\nVideos (id: title — summary):\n{items}\n\n"
+            "Assign each video to its best category. "
+            'Return only JSON: {"id": "category", ...}. Use exact category names. No other text.'
+        )
+        try:
+            raw = self._chat(self._SYSTEM, user, max_tokens=800)
+            data = _extract_json(raw)
+            if isinstance(data, dict):
+                valid = set(category_names)
+                result = {}
+                for k, v in data.items():
+                    try:
+                        if v in valid:
+                            result[int(k)] = v
+                    except (ValueError, TypeError):
+                        pass
+                return result
+        except Exception as e:
+            log.warning("OllamaLLM.assign_categories_bulk failed: %s", e)
+        return {}
 
 
 def get_llm(settings) -> BaseLLM:

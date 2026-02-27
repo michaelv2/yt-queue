@@ -84,10 +84,13 @@ async def lifespan(app: FastAPI):
     Path(settings.audio_dir).mkdir(parents=True, exist_ok=True)
     await archive_db.init()
     cleanup_task = asyncio.create_task(cleanup_loop(store, archive_db=archive_db))
+    device_info = settings.whisper_devices or settings.whisper_device
     log.info(
-        "yt-queue started — model=%s, device=%s, llm_provider=%s",
+        "yt-queue started — model=%s, device=%s, concurrency=%d, llm_provider=%s",
         settings.whisper_model,
-        settings.whisper_device,
+        device_info,
+        len([d for d in settings.whisper_devices.split(",") if d.strip()])
+            if settings.whisper_devices else settings.max_concurrent_jobs,
         settings.llm_provider,
     )
     yield
@@ -318,9 +321,10 @@ async def toggle_mark_delete(row_id: int, marked: bool = Query(...)):
 async def list_archive(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    category: str | None = Query(None),
 ) -> ArchiveListResponse:
-    items = await archive_db.list_transcripts(limit=limit, offset=offset)
-    total = await archive_db.count()
+    items = await archive_db.list_transcripts(limit=limit, offset=offset, category=category)
+    total = await archive_db.count(category=category)
     entries = [
         ArchiveEntry(
             **{k: v for k, v in item.items() if k not in ("audio_path",)},
@@ -432,6 +436,70 @@ async def delete_archive(req: ArchiveDeleteRequest) -> ArchiveDeleteResponse:
         except Exception:
             log.warning("Failed to delete audio file: %s", ap)
     return ArchiveDeleteResponse(deleted=deleted)
+
+
+# ── Category generation ───────────────────────────────────────────────────────
+
+_categorize_state: dict = {"running": False, "done": 0, "total": 0, "error": ""}
+
+
+@app.post("/api/categories/generate", status_code=202)
+async def generate_categories():
+    from .summarizer import NullLLM
+    if isinstance(llm, NullLLM):
+        raise HTTPException(status_code=400, detail="No LLM provider configured")
+    if _categorize_state["running"]:
+        raise HTTPException(status_code=409, detail="Categorization already running")
+    asyncio.create_task(_run_categorization())
+    return {"status": "started"}
+
+
+@app.get("/api/categories/status")
+async def get_categorize_status():
+    return _categorize_state
+
+
+@app.get("/api/categories")
+async def list_categories():
+    return await archive_db.get_all_categories()
+
+
+async def _run_categorization():
+    _categorize_state.update(running=True, done=0, total=0, error="")
+    try:
+        loop = asyncio.get_running_loop()
+
+        # Step 1: derive taxonomy from a random sample of summaries
+        samples = await archive_db.get_summaries_for_taxonomy(150)
+        if not samples:
+            _categorize_state["error"] = "No summaries available — run a batch first"
+            return
+        summaries = [s["summary"] for s in samples if s["summary"]]
+        cats = await loop.run_in_executor(None, lambda: llm.derive_taxonomy(summaries, 12))
+        if not cats:
+            _categorize_state["error"] = "LLM returned an empty taxonomy"
+            return
+        await archive_db.save_categories(cats)
+        category_names = [c["name"] for c in cats]
+        log.info("Taxonomy derived: %s", category_names)
+
+        # Step 2: assign every transcript in batches of 25
+        all_videos = await archive_db.get_all_for_categorization()
+        _categorize_state["total"] = len(all_videos)
+        batch_size = 25
+        for i in range(0, len(all_videos), batch_size):
+            chunk = all_videos[i : i + batch_size]
+            assignments = await loop.run_in_executor(
+                None, lambda c=chunk: llm.assign_categories_bulk(c, category_names)
+            )
+            if assignments:
+                await archive_db.bulk_assign_categories(assignments)
+            _categorize_state["done"] = min(i + batch_size, len(all_videos))
+    except Exception as e:
+        log.warning("Categorization failed: %s", e, exc_info=True)
+        _categorize_state["error"] = str(e)
+    finally:
+        _categorize_state["running"] = False
 
 
 # ── Health ────────────────────────────────────────────────────────────────────

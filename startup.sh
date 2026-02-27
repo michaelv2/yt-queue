@@ -12,6 +12,7 @@ if [[ -n "$CUBLAS_LIB" ]]; then
 fi
 
 export YTQUEUE_BASE_URL=http://localhost:9000
+# export YTQUEUE_WHISPER_DEVICES=cuda:0,cuda:1  # uncomment for multi-GPU parallelism
 export YTQUEUE_LLM_PROVIDER=ollama
 export YTQUEUE_LLM_MODEL=gemma3:27b
 export YTQUEUE_LLM_BASE_URL=http://llm-server:11434

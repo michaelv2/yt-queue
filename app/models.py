@@ -112,6 +112,7 @@ class ArchiveEntry(BaseModel):
     created_at: float
     archived_at: float
     has_audio: bool = False
+    category: str | None = None
 
 
 class ArchiveListResponse(BaseModel):

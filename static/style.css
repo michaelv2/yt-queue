@@ -436,6 +436,42 @@ select:focus { outline: none; border-color: var(--accent); }
 .score-controls button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .score-controls button:disabled { opacity: 0.5; cursor: not-allowed; }
 .score-status { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; }
+
+.category-controls { display: flex; align-items: center; gap: 8px; }
+.category-controls select {
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  cursor: pointer;
+}
+.category-controls button {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.category-controls button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.category-controls button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.category-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 4px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+.category-none { color: var(--text-muted); }
+
 .btn-danger {
   background: var(--danger);
   color: #fff;
@@ -480,9 +516,10 @@ table th:nth-child(1) { width: 36px; }   /* checkbox */
 table th:nth-child(2) { width: 180px; }  /* title */
 table th:nth-child(3) { width: 64px; }   /* duration */
 table th:nth-child(4) { width: auto; }   /* summary — takes remaining space */
-table th:nth-child(5) { width: 60px; }   /* score */
-table th:nth-child(6) { width: 90px; }   /* batch */
-table th:nth-child(7) { width: 96px; }   /* archived */
+table th:nth-child(5) { width: 120px; }  /* category */
+table th:nth-child(6) { width: 60px; }   /* score */
+table th:nth-child(7) { width: 90px; }   /* batch */
+table th:nth-child(8) { width: 96px; }   /* archived */
 
 .summary-cell { font-size: 0.82rem; line-height: 1.5; color: var(--text-muted); }
 

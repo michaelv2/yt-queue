@@ -90,10 +90,19 @@ class ArchiveDB:
                 deleted_at  REAL NOT NULL
             )
         """)
+        # Global category taxonomy
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS categories (
+                name        TEXT PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                created_at  REAL NOT NULL
+            )
+        """)
         await self._db.commit()
         # Migrations
         for col, definition in [
             ("is_marked_for_deletion", "INTEGER NOT NULL DEFAULT 0"),
+            ("category", "TEXT"),
         ]:
             try:
                 await self._db.execute(
@@ -199,15 +208,27 @@ class ArchiveDB:
         return row[0]
 
     async def list_transcripts(
-        self, limit: int = 50, offset: int = 0
+        self, limit: int = 50, offset: int = 0, category: str | None = None
     ) -> list[dict]:
-        async with self._db.execute(
-            """SELECT id, video_id, title, duration, youtube_url,
+        if category == "_none_":
+            where, params = "WHERE category IS NULL", (limit, offset)
+            sql = f"""SELECT id, video_id, title, duration, youtube_url,
                       summary, relevance_score, is_flagged, is_marked_for_deletion,
-                      batch_id, created_at, archived_at, audio_path
-               FROM transcripts ORDER BY archived_at DESC LIMIT ? OFFSET ?""",
-            (limit, offset),
-        ) as cur:
+                      batch_id, created_at, archived_at, audio_path, category
+               FROM transcripts {where} ORDER BY archived_at DESC LIMIT ? OFFSET ?"""
+        elif category is not None:
+            where, params = "WHERE category = ?", (category, limit, offset)
+            sql = f"""SELECT id, video_id, title, duration, youtube_url,
+                      summary, relevance_score, is_flagged, is_marked_for_deletion,
+                      batch_id, created_at, archived_at, audio_path, category
+               FROM transcripts {where} ORDER BY archived_at DESC LIMIT ? OFFSET ?"""
+        else:
+            sql = """SELECT id, video_id, title, duration, youtube_url,
+                      summary, relevance_score, is_flagged, is_marked_for_deletion,
+                      batch_id, created_at, archived_at, audio_path, category
+               FROM transcripts ORDER BY archived_at DESC LIMIT ? OFFSET ?"""
+            params = (limit, offset)
+        async with self._db.execute(sql, params) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
@@ -332,8 +353,14 @@ class ArchiveDB:
             rows = await cur.fetchall()
         return {r[0] for r in rows}
 
-    async def count(self) -> int:
-        async with self._db.execute("SELECT COUNT(*) FROM transcripts") as cur:
+    async def count(self, category: str | None = None) -> int:
+        if category == "_none_":
+            sql, params = "SELECT COUNT(*) FROM transcripts WHERE category IS NULL", ()
+        elif category is not None:
+            sql, params = "SELECT COUNT(*) FROM transcripts WHERE category = ?", (category,)
+        else:
+            sql, params = "SELECT COUNT(*) FROM transcripts", ()
+        async with self._db.execute(sql, params) as cur:
             row = await cur.fetchone()
         return row[0]
 
@@ -354,3 +381,47 @@ class ArchiveDB:
         ) as cur:
             rows = await cur.fetchall()
         return {r[0] for r in rows}
+
+    # ── Category methods ──────────────────────────────────────────────────────
+
+    async def save_categories(self, cats: list[dict]) -> None:
+        """Replace the entire category taxonomy."""
+        await self._db.execute("DELETE FROM categories")
+        now = time.time()
+        await self._db.executemany(
+            "INSERT INTO categories (name, description, created_at) VALUES (?, ?, ?)",
+            [(c["name"], c.get("description", ""), now) for c in cats],
+        )
+        await self._db.commit()
+
+    async def get_all_categories(self) -> list[dict]:
+        async with self._db.execute(
+            "SELECT name, description FROM categories ORDER BY name"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def bulk_assign_categories(self, assignments: dict[int, str]) -> None:
+        """Update category for multiple transcripts by row id."""
+        await self._db.executemany(
+            "UPDATE transcripts SET category = ? WHERE id = ?",
+            [(cat, tid) for tid, cat in assignments.items()],
+        )
+        await self._db.commit()
+
+    async def get_summaries_for_taxonomy(self, limit: int = 150) -> list[dict]:
+        """Return a random sample of summaries for taxonomy derivation."""
+        async with self._db.execute(
+            "SELECT id, title, summary FROM transcripts WHERE summary != '' ORDER BY RANDOM() LIMIT ?",
+            (limit,),
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_all_for_categorization(self) -> list[dict]:
+        """Return id, title, summary for every transcript."""
+        async with self._db.execute(
+            "SELECT id, title, summary FROM transcripts ORDER BY id"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]

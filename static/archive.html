@@ -23,6 +23,13 @@
         <button id="score-btn">Score all</button>
         <span id="score-status" class="score-status hidden"></span>
       </div>
+      <div class="category-controls">
+        <select id="category-filter">
+          <option value="">All categories</option>
+        </select>
+        <button id="categorize-btn">Categorize</button>
+        <span id="categorize-status" class="score-status hidden"></span>
+      </div>
       <button id="delete-btn" class="btn-danger hidden">Delete selected</button>
     </div>
     <div id="archive-table-wrap">
@@ -33,6 +40,7 @@
             <th data-col="title" data-label="Title">Title</th>
             <th data-col="duration" data-label="Duration">Duration</th>
             <th>Summary</th>
+            <th data-col="category" data-label="Category">Category</th>
             <th data-col="relevance_score" data-label="Score">Score ↓<div id="score-criteria-label" class="score-criteria-label"></div></th>
             <th data-col="batch_id" data-label="Batch">Batch</th>
             <th data-col="archived_at" data-label="Archived">Archived</th>
