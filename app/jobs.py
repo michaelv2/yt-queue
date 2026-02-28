@@ -41,7 +41,7 @@ class JobStore:
         expired = [
             jid
             for jid, j in self._jobs.items()
-            if j.status in (JobStatus.completed, JobStatus.failed)
+            if j.status == JobStatus.completed
             and (now - j.created_at) > settings.job_ttl_seconds
         ]
         for jid in expired:
@@ -55,9 +55,9 @@ class BatchStore:
     def __init__(self):
         self._batches: dict[str, dict] = {}  # batch_id → {job_ids, filter_criteria}
 
-    def create(self, filter_criteria: str = "") -> str:
+    def create(self, filter_criteria: str = "", skipped: int = 0) -> str:
         batch_id = uuid.uuid4().hex[:16]
-        self._batches[batch_id] = {"job_ids": [], "filter_criteria": filter_criteria}
+        self._batches[batch_id] = {"job_ids": [], "filter_criteria": filter_criteria, "skipped": skipped}
         return batch_id
 
     def add_job(self, batch_id: str, job_id: str) -> None:
@@ -209,8 +209,9 @@ class JobRunner:
             # Phase 4: Score relevance (non-fatal)
             if summary and filter_criteria:
                 try:
+                    score_text = f"{job.title}\n\n{summary}" if job.title else summary
                     relevance_score = await loop.run_in_executor(
-                        None, llm.score_relevance, summary, filter_criteria
+                        None, llm.score_relevance, score_text, filter_criteria
                     )
                     job.relevance_score = relevance_score
                     await self.store.update(job)

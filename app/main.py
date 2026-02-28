@@ -154,7 +154,7 @@ async def create_batch(req: BatchSubmitRequest) -> BatchSubmitResponse:
     if skipped:
         log.info("Batch skipping %d already-archived video(s)", skipped)
 
-    batch_id = batch_store.create(filter_criteria=req.filter_criteria)
+    batch_id = batch_store.create(filter_criteria=req.filter_criteria, skipped=skipped)
     await archive_db.create_batch(batch_id, filter_criteria=req.filter_criteria)
 
     job_ids: list[str] = []
@@ -190,13 +190,16 @@ async def get_batch_status(batch_id: str) -> BatchStatus:
                 relevance_score=job.relevance_score,
             ))
 
-    completed = sum(1 for j in jobs if j.status == JobStatus.completed)
-    failed = sum(1 for j in jobs if j.status == JobStatus.failed)
+    total = len(batch["job_ids"])
     in_progress = sum(1 for j in jobs if j.status not in (JobStatus.completed, JobStatus.failed))
+    # Use the DB as source of truth for completed — covers jobs evicted from the in-memory store
+    completed = await archive_db.count_batch(batch_id)
+    failed = max(0, total - completed - in_progress)
 
-    total = len(jobs)
-    if total == 0 or in_progress > 0:
-        status = "processing" if total > 0 else "pending"
+    if in_progress > 0:
+        status = "processing"
+    elif total == 0:
+        status = "pending"
     elif failed == total:
         status = "failed"
     else:
@@ -209,6 +212,7 @@ async def get_batch_status(batch_id: str) -> BatchStatus:
         completed=completed,
         failed=failed,
         in_progress=in_progress,
+        skipped=batch.get("skipped", 0),
         status=status,
         jobs=jobs,
     )
@@ -275,6 +279,30 @@ async def summarize_batch_status(batch_id: str):
 # ── Triage route ──────────────────────────────────────────────────────────────
 
 
+@app.get("/api/triage")
+async def get_triage_global() -> list[TriageEntry]:
+    rows = await archive_db.get_triage()
+    video_ids = [r["video_id"] for r in rows]
+    prev_deleted = await archive_db.get_previously_deleted(video_ids)
+    return [
+        TriageEntry(
+            id=r["id"],
+            video_id=r["video_id"],
+            title=r["title"],
+            duration=r["duration"],
+            summary=r["summary"] or "",
+            relevance_score=r["relevance_score"],
+            is_flagged=bool(r["is_flagged"]),
+            is_marked_for_deletion=bool(r["is_marked_for_deletion"]),
+            youtube_url=r["youtube_url"],
+            batch_id=r.get("batch_id"),
+            category=r.get("category"),
+            was_previously_deleted=r["video_id"] in prev_deleted,
+        )
+        for r in rows
+    ]
+
+
 @app.get("/api/triage/{batch_id}")
 async def get_triage(batch_id: str) -> list[TriageEntry]:
     rows = await archive_db.get_triage(batch_id)
@@ -292,6 +320,7 @@ async def get_triage(batch_id: str) -> list[TriageEntry]:
             is_marked_for_deletion=bool(r["is_marked_for_deletion"]),
             youtube_url=r["youtube_url"],
             batch_id=r.get("batch_id"),
+            category=r.get("category"),
             was_previously_deleted=r["video_id"] in prev_deleted,
         )
         for r in rows
@@ -314,6 +343,14 @@ async def toggle_mark_delete(row_id: int, marked: bool = Query(...)):
     return {"id": row_id, "is_marked_for_deletion": marked}
 
 
+@app.post("/api/archive/{row_id}/watch")
+async def toggle_watch(row_id: int, watched: bool = Query(...)):
+    found = await archive_db.set_watched(row_id, watched)
+    if not found:
+        raise HTTPException(status_code=404, detail="Transcript not found")
+    return {"id": row_id, "is_watched": watched}
+
+
 # ── Archive routes ────────────────────────────────────────────────────────────
 
 
@@ -322,9 +359,18 @@ async def list_archive(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     category: str | None = Query(None),
+    tag: str | None = Query(None),
+    batch_id: str | None = Query(None),
+    sort_col: str = Query("archived_at"),
+    sort_dir: str = Query("desc"),
+    search: str | None = Query(None),
 ) -> ArchiveListResponse:
-    items = await archive_db.list_transcripts(limit=limit, offset=offset, category=category)
-    total = await archive_db.count(category=category)
+    items = await archive_db.list_transcripts(
+        limit=limit, offset=offset, category=category, tag=tag,
+        batch_id=batch_id, sort_col=sort_col, sort_dir=sort_dir,
+        search=search,
+    )
+    total = await archive_db.count(category=category, tag=tag, batch_id=batch_id, search=search)
     entries = [
         ArchiveEntry(
             **{k: v for k, v in item.items() if k not in ("audio_path",)},
@@ -376,7 +422,7 @@ async def get_archive_audio(row_id: int):
 
 class ArchiveScoreRequest(BaseModel):
     criteria: str
-    ids: list[int]
+    ids: list[int] = []  # empty = score everything
 
 
 _score_running: set[str] = set()
@@ -385,10 +431,10 @@ _score_running: set[str] = set()
 async def _run_score_archive(key: str, ids: list[int], criteria: str) -> None:
     loop = asyncio.get_running_loop()
     try:
-        rows = await archive_db.get_summaries_by_ids(ids)
+        rows = await archive_db.get_summaries_by_ids(ids) if ids else await archive_db.get_all_summaries()
         log.info("Scoring %d transcripts against criteria: %s", len(rows), criteria)
         for row in rows:
-            text = row["summary"] or row["full_text"][:1000]
+            text = f"{row['title']}\n\n{row['summary'] or row['full_text'][:1000]}"
             if not text:
                 continue
             try:
@@ -405,8 +451,6 @@ async def _run_score_archive(key: str, ids: list[int], criteria: str) -> None:
 
 @app.post("/api/archive/score", status_code=202)
 async def score_archive(req: ArchiveScoreRequest):
-    if not req.ids:
-        raise HTTPException(status_code=400, detail="No IDs provided")
     if not req.criteria.strip():
         raise HTTPException(status_code=400, detail="No criteria provided")
     from .summarizer import NullLLM

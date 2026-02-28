@@ -8,9 +8,11 @@
 </head>
 <body>
   <header>
-    <h1>yt-queue <span class="subtitle">Archive</span></h1>
+    <h1>yt-queue</h1>
     <nav>
       <a href="/">Submit</a>
+      <a href="/triage.html">Previews</a>
+      <a href="/previews.html">Thumbnails</a>
       <a href="/archive.html" class="active">Archive</a>
     </nav>
   </header>
@@ -18,6 +20,7 @@
   <main>
     <div class="archive-controls">
       <span id="total-count" class="total-count"></span>
+      <input type="text" id="search-input" placeholder="Search transcripts…" autocomplete="off">
       <div class="score-controls">
         <input type="text" id="score-criteria" placeholder="Score by criteria…" autocomplete="off">
         <button id="score-btn">Score all</button>
@@ -26,6 +29,14 @@
       <div class="category-controls">
         <select id="category-filter">
           <option value="">All categories</option>
+        </select>
+        <select id="tag-filter">
+          <option value="">All tags</option>
+          <option value="watched">👁 Watched</option>
+          <option value="unwatched">👁 Unwatched</option>
+          <option value="flagged">★ Flagged</option>
+          <option value="marked_for_deletion">🗑 Marked for deletion</option>
+          <option value="has_audio">♪ Has audio</option>
         </select>
         <button id="categorize-btn">Categorize</button>
         <span id="categorize-status" class="score-status hidden"></span>

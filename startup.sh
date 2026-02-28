@@ -16,6 +16,6 @@ export YTQUEUE_BASE_URL=http://localhost:9000
 export YTQUEUE_LLM_PROVIDER=ollama
 export YTQUEUE_LLM_MODEL=gemma3:27b
 export YTQUEUE_LLM_BASE_URL=http://llm-server:11434
-export YTQUEUE_MAX_DURATION_SECONDS=10800
+export YTQUEUE_MAX_DURATION_SECONDS=18000
 
 uvicorn app.main:app --host 0.0.0.0 --port 9000

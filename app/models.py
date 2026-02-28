@@ -77,6 +77,7 @@ class BatchStatus(BaseModel):
     completed: int
     failed: int
     in_progress: int
+    skipped: int = 0
     status: str               # pending | processing | complete
     jobs: list[JobStatusResponse]
 
@@ -90,8 +91,10 @@ class TriageEntry(BaseModel):
     relevance_score: float | None
     is_flagged: bool
     is_marked_for_deletion: bool
+    is_watched: bool = False
     youtube_url: str
     batch_id: str | None
+    category: str | None = None
     was_previously_deleted: bool = False
 
 
@@ -108,6 +111,7 @@ class ArchiveEntry(BaseModel):
     relevance_score: float | None = None
     is_flagged: bool = False
     is_marked_for_deletion: bool = False
+    is_watched: bool = False
     batch_id: str | None = None
     created_at: float
     archived_at: float

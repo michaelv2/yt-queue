@@ -3,14 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>yt-queue — Triage</title>
+  <title>yt-queue — Previews</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header>
-    <h1>yt-queue <span class="subtitle">Triage</span></h1>
+    <h1>yt-queue</h1>
     <nav>
       <a href="/">Submit</a>
+      <a href="/triage.html" class="active">Previews</a>
+      <a href="/previews.html">Thumbnails</a>
       <a href="/archive.html">Archive</a>
     </nav>
   </header>
@@ -29,6 +31,11 @@
             <option value="flagged">Flagged only</option>
             <option value="high">High relevance (≥0.7)</option>
             <option value="medium">Medium (≥0.4)</option>
+          </select>
+        </label>
+        <label>Category:
+          <select id="category-filter">
+            <option value="">All categories</option>
           </select>
         </label>
         <label>Sort:
@@ -52,6 +59,6 @@
     </div>
   </main>
 
-  <script src="/triage.js"></script>
+  <script src="/triage.js?v=2"></script>
 </body>
 </html>

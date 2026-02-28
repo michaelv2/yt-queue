@@ -4,10 +4,13 @@ const POLL_INTERVAL = 2500;
 
 const params = new URLSearchParams(location.search);
 const batchId = params.get('batch');
+const isGlobalMode = !batchId;
 
-if (!batchId) {
-  document.getElementById('card-grid').innerHTML =
-    '<p class="empty">No batch ID provided. <a href="/">Submit a batch</a>.</p>';
+if (isGlobalMode) {
+  // Hide batch-specific UI in global mode
+  document.getElementById('batch-progress').classList.add('hidden');
+  document.getElementById('summarize-btn').classList.add('hidden');
+  document.getElementById('summarize-status').classList.add('hidden');
 }
 
 let _entries = [];
@@ -17,9 +20,9 @@ let _batchDone = false;
 // ── Data loading ──────────────────────────────────────────────────────────────
 
 async function loadTriage() {
-  if (!batchId) return;
   try {
-    const resp = await fetch(`/api/triage/${batchId}`);
+    const url = batchId ? `/api/triage/${batchId}` : '/api/triage';
+    const resp = await fetch(url);
     if (!resp.ok) throw new Error('Failed to load triage data');
     _entries = await resp.json();
     render();
@@ -60,7 +63,8 @@ function updateBatchProgress(batch) {
     : 0;
   wrap.classList.remove('hidden');
   bar.style.width = pct + '%';
-  label.textContent = `${batch.completed} / ${batch.total} complete · ${batch.failed} failed · ${batch.in_progress} in progress`;
+  const skippedPart = batch.skipped ? ` · ${batch.skipped} skipped` : '';
+  label.textContent = `${batch.completed} / ${batch.total} complete · ${batch.failed} failed · ${batch.in_progress} in progress${skippedPart}`;
 }
 
 function hideBatchProgress() {
@@ -73,6 +77,8 @@ function getFilteredSorted() {
   const filterVal = document.getElementById('filter-select').value;
   const sortVal = document.getElementById('sort-select').value;
 
+  const categoryVal = document.getElementById('category-filter').value;
+
   let items = [..._entries];
 
   if (filterVal === 'flagged') {
@@ -81,6 +87,12 @@ function getFilteredSorted() {
     items = items.filter(e => e.relevance_score !== null && e.relevance_score >= 0.7);
   } else if (filterVal === 'medium') {
     items = items.filter(e => e.relevance_score !== null && e.relevance_score >= 0.4);
+  }
+
+  if (categoryVal === '_none_') {
+    items = items.filter(e => !e.category);
+  } else if (categoryVal) {
+    items = items.filter(e => e.category === categoryVal);
   }
 
   if (sortVal === 'relevance') {
@@ -129,6 +141,11 @@ function render() {
   grid.querySelectorAll('.delete-mark-btn').forEach(btn => {
     btn.addEventListener('click', () => toggleMarkDelete(parseInt(btn.dataset.id)));
   });
+
+  // Attach watch toggle listeners
+  grid.querySelectorAll('.watch-toggle-btn').forEach(btn => {
+    btn.addEventListener('click', () => toggleWatch(parseInt(btn.dataset.id)));
+  });
 }
 
 function cardHtml(entry) {
@@ -153,6 +170,11 @@ function cardHtml(entry) {
           ${scoreHtml}
           ${prevDeletedHtml}
           <div class="card-actions">
+            <button class="watch-toggle-btn ${entry.is_watched ? 'watched' : ''}"
+                    data-id="${entry.id}"
+                    title="${entry.is_watched ? 'Mark unwatched' : 'Mark watched'}">
+              👁
+            </button>
             <button class="flag-btn ${entry.is_flagged ? 'flagged' : ''}"
                     data-id="${entry.id}"
                     title="${entry.is_flagged ? 'Unflag' : 'Flag'}">
@@ -215,12 +237,54 @@ async function toggleMarkDelete(id) {
   }
 }
 
+async function toggleWatch(id) {
+  const entry = _entries.find(e => e.id === id);
+  if (!entry) return;
+  const newWatched = !entry.is_watched;
+  try {
+    const resp = await fetch(`/api/archive/${id}/watch?watched=${newWatched}`, { method: 'POST' });
+    if (!resp.ok) throw new Error('Watch update failed');
+    entry.is_watched = newWatched;
+    render();
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
 // ── Summarize ─────────────────────────────────────────────────────────────────
 
 let _summarizeTimer = null;
 
+function confirmAction(message) {
+  return new Promise(resolve => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'modal-backdrop';
+    backdrop.id = 'confirm-modal';
+    backdrop.innerHTML = `
+      <div class="modal modal-sm" role="dialog" aria-modal="true">
+        <div class="modal-body">
+          <p class="confirm-msg">${esc(message)}</p>
+          <div class="confirm-actions">
+            <button id="confirm-cancel" class="btn-summarize">Cancel</button>
+            <button id="confirm-ok" class="btn-danger">Generate</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(backdrop);
+    const close = result => { backdrop.remove(); resolve(result); };
+    document.getElementById('confirm-cancel').addEventListener('click', () => close(false));
+    document.getElementById('confirm-ok').addEventListener('click', () => close(true));
+    backdrop.addEventListener('click', e => { if (e.target === backdrop) close(false); });
+  });
+}
+
 document.getElementById('summarize-btn').addEventListener('click', async () => {
   if (!batchId) return;
+  const ok = await confirmAction(
+    'Re-generate summaries for all videos in this batch? Existing summaries will be overwritten.'
+  );
+  if (!ok) return;
   const btn = document.getElementById('summarize-btn');
   const status = document.getElementById('summarize-status');
   btn.disabled = true;
@@ -268,6 +332,33 @@ function pollSummarize() {
 
 document.getElementById('filter-select').addEventListener('change', render);
 document.getElementById('sort-select').addEventListener('change', render);
+document.getElementById('category-filter').addEventListener('change', render);
+
+async function loadCategories() {
+  try {
+    const resp = await fetch('/api/categories');
+    if (!resp.ok) return;
+    const cats = await resp.json();
+    const sel = document.getElementById('category-filter');
+    const current = sel.value;
+    sel.innerHTML = '<option value="">All categories</option>';
+    cats.forEach(c => {
+      const opt = document.createElement('option');
+      opt.value = c.name;
+      opt.textContent = c.name;
+      sel.appendChild(opt);
+    });
+    if (cats.length > 0) {
+      const none = document.createElement('option');
+      none.value = '_none_';
+      none.textContent = 'Uncategorized';
+      sel.appendChild(none);
+    }
+    if (current) sel.value = current;
+  } catch (e) {
+    console.warn('Category load error:', e);
+  }
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
@@ -292,7 +383,12 @@ if (batchId) {
       }
     })
     .catch(() => loadTriage());
+} else {
+  // Global mode — load all archived videos
+  loadTriage();
 }
+
+loadCategories();
 
 // ── Transcript modal ──────────────────────────────────────────────────────────
 
@@ -317,6 +413,7 @@ function showModal(data) {
 
   const duration = data.duration ? fmtDuration(data.duration) : '';
   const wordCount = data.full_text ? data.full_text.split(/\s+/).filter(Boolean).length : 0;
+  const savedTs = localStorage.getItem('ytqueue_show_timestamps') === 'true';
 
   backdrop.innerHTML = `
     <div class="modal" role="dialog" aria-modal="true">
@@ -325,6 +422,9 @@ function showModal(data) {
           <a href="${esc(data.youtube_url)}" target="_blank" rel="noopener">${esc(data.title)}</a>
         </div>
         <div class="modal-actions">
+          <label class="ts-toggle-label">
+            <input type="checkbox" id="modal-show-timestamps"${savedTs ? ' checked' : ''}> Timestamps
+          </label>
           <button class="btn-copy" id="copy-btn">Copy text</button>
           <button class="modal-close" id="modal-close" aria-label="Close">×</button>
         </div>
@@ -333,19 +433,67 @@ function showModal(data) {
         <div class="transcript-meta">
           ${duration ? duration + ' · ' : ''}${wordCount.toLocaleString()} words
         </div>
-        <div class="transcript-text">${esc(data.full_text || '')}</div>
+        ${data.has_audio ? `<audio id="modal-audio-player" controls src="/api/archive/${data.id}/audio" style="width:100%;margin-bottom:12px;"></audio>` : ''}
+        <div class="transcript-body" id="transcript-body"></div>
       </div>
     </div>
   `;
 
   document.body.appendChild(backdrop);
 
+  const segments = data.segments || [];
+  const fullText = data.full_text || '';
+  const audioEl = document.getElementById('modal-audio-player');
+
+  function renderModalBody() {
+    const body = document.getElementById('transcript-body');
+    body.innerHTML = '';
+    const showTs = document.getElementById('modal-show-timestamps').checked;
+
+    if (showTs && segments.length > 0) {
+      for (const seg of segments) {
+        const div = document.createElement('div');
+        div.className = 'segment';
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'segment-time' + (audioEl ? ' segment-time-clickable' : '');
+        timeSpan.textContent = fmtDuration(seg.start);
+
+        if (audioEl) {
+          timeSpan.title = 'Click to seek audio';
+          timeSpan.addEventListener('click', () => {
+            audioEl.currentTime = seg.start;
+            audioEl.play();
+          });
+        } else {
+          const t = Math.floor(seg.start);
+          timeSpan.addEventListener('click', () => {
+            window.open(data.youtube_url + '&t=' + t, '_blank', 'noopener');
+          });
+        }
+
+        div.appendChild(timeSpan);
+        div.appendChild(document.createTextNode(seg.text));
+        body.appendChild(div);
+      }
+    } else {
+      body.textContent = fullText;
+    }
+  }
+
+  const checkbox = document.getElementById('modal-show-timestamps');
+  checkbox.addEventListener('change', () => {
+    localStorage.setItem('ytqueue_show_timestamps', checkbox.checked);
+    renderModalBody();
+  });
+  renderModalBody();
+
   document.getElementById('modal-close').addEventListener('click', closeModal);
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeModal(); });
   document.addEventListener('keydown', onModalKey);
 
   document.getElementById('copy-btn').addEventListener('click', () => {
-    navigator.clipboard.writeText(data.full_text || '').then(() => {
+    navigator.clipboard.writeText(fullText).then(() => {
       const btn = document.getElementById('copy-btn');
       btn.textContent = 'Copied!';
       btn.classList.add('copied');

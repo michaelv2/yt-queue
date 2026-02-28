@@ -7,10 +7,14 @@ let _items = [];
 let _sortCol = 'archived_at';
 let _sortDir = 'desc';
 let _categoryFilter = '';
+let _tagFilter = '';
+let _searchQuery = '';
 
 async function loadArchive(offset = 0) {
-  const params = new URLSearchParams({ limit: PAGE_SIZE, offset });
+  const params = new URLSearchParams({ limit: PAGE_SIZE, offset, sort_col: _sortCol, sort_dir: _sortDir });
+  if (_searchQuery) params.set('search', _searchQuery);
   if (_categoryFilter) params.set('category', _categoryFilter);
+  if (_tagFilter) params.set('tag', _tagFilter);
   const resp = await fetch(`/api/archive?${params}`);
   if (!resp.ok) return;
   const data = await resp.json();
@@ -22,21 +26,9 @@ async function loadArchive(offset = 0) {
   document.getElementById('total-count').textContent = `${_total} archived transcript${_total !== 1 ? 's' : ''}`;
 }
 
-function getSorted() {
-  const col = _sortCol;
-  const dir = _sortDir === 'asc' ? 1 : -1;
-  return [..._items].sort((a, b) => {
-    let av = a[col], bv = b[col];
-    if (av === null || av === undefined) av = col === 'relevance_score' ? -1 : '';
-    if (bv === null || bv === undefined) bv = col === 'relevance_score' ? -1 : '';
-    if (typeof av === 'string') return dir * av.localeCompare(bv);
-    return dir * (av - bv);
-  });
-}
-
 function renderTable() {
   _currentIds = _items.map(i => i.id);
-  const items = getSorted();
+  const items = _items;
   // Update sort indicators on headers
   document.querySelectorAll('th[data-col]').forEach(th => {
     const indicator = th.dataset.col === _sortCol
@@ -54,13 +46,14 @@ function renderTable() {
       <td><input type="checkbox" class="row-check" value="${item.id}"></td>
       <td>
         <button class="transcript-btn link-btn" data-id="${item.id}">${esc(item.title)}</button>
+        ${item.is_watched ? '<span class="badge-watched" title="Watched">👁</span>' : ''}
         ${item.is_flagged ? '<span class="badge-flag" title="Flagged">★</span>' : ''}
         ${item.is_marked_for_deletion ? '<span class="badge-delete" title="Marked for deletion">🗑</span>' : ''}
         ${item.has_audio ? '<span class="audio-badge" title="Audio available">♪</span>' : ''}
       </td>
       <td>${item.duration ? fmtDuration(item.duration) : '—'}</td>
       <td class="summary-cell">${esc(item.summary || '')}</td>
-      <td>${item.category ? `<span class="category-badge">${esc(item.category)}</span>` : '<span class="category-none">—</span>'}</td>
+      <td>${item.category ? `<span class="category-badge" title="${esc(item.category)}">${esc(item.category)}</span>` : '<span class="category-none">—</span>'}</td>
       <td>${item.relevance_score !== null && item.relevance_score !== undefined ? Math.round(item.relevance_score * 100) + '%' : '—'}</td>
       <td>${item.batch_id ? `<a href="/triage.html?batch=${esc(item.batch_id)}">${esc(item.batch_id.slice(0, 8))}…</a>` : '—'}</td>
       <td>${new Date(item.archived_at * 1000).toLocaleDateString()}</td>
@@ -90,7 +83,7 @@ function initSortHeaders() {
         _sortCol = th.dataset.col;
         _sortDir = th.dataset.col === 'relevance_score' ? 'desc' : 'asc';
       }
-      renderTable();
+      loadArchive(0);
     });
   });
 }
@@ -156,6 +149,7 @@ function showModal(data) {
 
   const duration = data.duration ? fmtDuration(data.duration) : '';
   const wordCount = data.full_text ? data.full_text.split(/\s+/).filter(Boolean).length : 0;
+  const savedTs = localStorage.getItem('ytqueue_show_timestamps') === 'true';
 
   backdrop.innerHTML = `
     <div class="modal" role="dialog" aria-modal="true">
@@ -164,6 +158,9 @@ function showModal(data) {
           <a href="${esc(data.youtube_url)}" target="_blank" rel="noopener">${esc(data.title)}</a>
         </div>
         <div class="modal-actions">
+          <label class="ts-toggle-label">
+            <input type="checkbox" id="modal-show-timestamps"${savedTs ? ' checked' : ''}> Timestamps
+          </label>
           <button class="btn-copy" id="copy-btn">Copy text</button>
           <button class="modal-close" id="modal-close" aria-label="Close">×</button>
         </div>
@@ -172,19 +169,67 @@ function showModal(data) {
         <div class="transcript-meta">
           ${duration ? duration + ' · ' : ''}${wordCount.toLocaleString()} words
         </div>
-        <div class="transcript-text">${esc(data.full_text || '')}</div>
+        ${data.has_audio ? `<audio id="modal-audio-player" controls src="/api/archive/${data.id}/audio" style="width:100%;margin-bottom:12px;"></audio>` : ''}
+        <div class="transcript-body" id="transcript-body"></div>
       </div>
     </div>
   `;
 
   document.body.appendChild(backdrop);
 
+  const segments = data.segments || [];
+  const fullText = data.full_text || '';
+  const audioEl = document.getElementById('modal-audio-player');
+
+  function renderModalBody() {
+    const body = document.getElementById('transcript-body');
+    body.innerHTML = '';
+    const showTs = document.getElementById('modal-show-timestamps').checked;
+
+    if (showTs && segments.length > 0) {
+      for (const seg of segments) {
+        const div = document.createElement('div');
+        div.className = 'segment';
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'segment-time' + (audioEl ? ' segment-time-clickable' : '');
+        timeSpan.textContent = fmtDuration(seg.start);
+
+        if (audioEl) {
+          timeSpan.title = 'Click to seek audio';
+          timeSpan.addEventListener('click', () => {
+            audioEl.currentTime = seg.start;
+            audioEl.play();
+          });
+        } else {
+          const t = Math.floor(seg.start);
+          timeSpan.addEventListener('click', () => {
+            window.open(data.youtube_url + '&t=' + t, '_blank', 'noopener');
+          });
+        }
+
+        div.appendChild(timeSpan);
+        div.appendChild(document.createTextNode(seg.text));
+        body.appendChild(div);
+      }
+    } else {
+      body.textContent = fullText;
+    }
+  }
+
+  const checkbox = document.getElementById('modal-show-timestamps');
+  checkbox.addEventListener('change', () => {
+    localStorage.setItem('ytqueue_show_timestamps', checkbox.checked);
+    renderModalBody();
+  });
+  renderModalBody();
+
   document.getElementById('modal-close').addEventListener('click', closeModal);
   backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeModal(); });
   document.addEventListener('keydown', onModalKey);
 
   document.getElementById('copy-btn').addEventListener('click', () => {
-    navigator.clipboard.writeText(data.full_text || '').then(() => {
+    navigator.clipboard.writeText(fullText).then(() => {
       const btn = document.getElementById('copy-btn');
       btn.textContent = 'Copied!';
       btn.classList.add('copied');
@@ -224,22 +269,24 @@ let _currentIds = [];
 document.getElementById('score-btn').addEventListener('click', async () => {
   const criteria = document.getElementById('score-criteria').value.trim();
   if (!criteria) { alert('Enter filter criteria first.'); return; }
-  if (!_currentIds.length) return;
 
   const btn = document.getElementById('score-btn');
   const status = document.getElementById('score-status');
   btn.disabled = true;
-  status.textContent = `Scoring ${_currentIds.length} transcripts…`;
+  status.textContent = `Scoring ${_total} transcripts…`;
   status.classList.remove('hidden');
 
   try {
     const resp = await fetch('/api/archive/score', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ criteria, ids: _currentIds }),
+      body: JSON.stringify({ criteria }),
     });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || 'Failed to start');
+    if (!resp.ok) {
+      const detail = data.detail;
+      throw new Error(Array.isArray(detail) ? detail.map(e => e.msg).join(', ') : (detail || 'Failed to start'));
+    }
     localStorage.setItem('ytqueue_score_criteria', criteria);
     pollScoreStatus();
   } catch (e) {
@@ -274,6 +321,17 @@ initSortHeaders();
 restoreScoreCriteria();
 loadArchive();
 loadCategories();
+
+// ── Search ────────────────────────────────────────────────────────────────────
+
+let _searchTimer = null;
+document.getElementById('search-input').addEventListener('input', (e) => {
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(() => {
+    _searchQuery = e.target.value.trim();
+    loadArchive(0);
+  }, 300);
+});
 
 function restoreScoreCriteria() {
   const saved = localStorage.getItem('ytqueue_score_criteria');
@@ -322,6 +380,11 @@ function populateCategoryFilter(cats) {
 
 document.getElementById('category-filter').addEventListener('change', (e) => {
   _categoryFilter = e.target.value;
+  loadArchive(0);
+});
+
+document.getElementById('tag-filter').addEventListener('change', (e) => {
+  _tagFilter = e.target.value;
   loadArchive(0);
 });
 

@@ -103,6 +103,7 @@ class ArchiveDB:
         for col, definition in [
             ("is_marked_for_deletion", "INTEGER NOT NULL DEFAULT 0"),
             ("category", "TEXT"),
+            ("is_watched", "INTEGER NOT NULL DEFAULT 0"),
         ]:
             try:
                 await self._db.execute(
@@ -207,28 +208,58 @@ class ArchiveDB:
         await self._db.commit()
         return row[0]
 
+    _SORT_COLS = {
+        "archived_at", "title", "duration", "relevance_score", "batch_id", "category",
+    }
+
+    _TAG_CLAUSES = {
+        "flagged": "is_flagged = 1",
+        "marked_for_deletion": "is_marked_for_deletion = 1",
+        "has_audio": "audio_path IS NOT NULL",
+        "watched": "is_watched = 1",
+        "unwatched": "is_watched = 0",
+    }
+
     async def list_transcripts(
-        self, limit: int = 50, offset: int = 0, category: str | None = None
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        category: str | None = None,
+        tag: str | None = None,
+        batch_id: str | None = None,
+        sort_col: str = "archived_at",
+        sort_dir: str = "desc",
+        search: str | None = None,
     ) -> list[dict]:
+        col = sort_col if sort_col in self._SORT_COLS else "archived_at"
+        direction = "ASC" if sort_dir == "asc" else "DESC"
+        # NULLs last for columns that can be null
+        qualified_col = f"transcripts.{col}"
+        order = f"ORDER BY {qualified_col} IS NULL, {qualified_col} {direction}"
+        select = """SELECT transcripts.id, video_id, transcripts.title, duration, youtube_url,
+                      transcripts.summary, relevance_score, is_flagged, is_marked_for_deletion,
+                      is_watched, batch_id, created_at, archived_at, audio_path, category
+               FROM transcripts"""
+        clauses: list[str] = []
+        params: list = []
+        if search:
+            select += " JOIN transcripts_fts ON transcripts.id = transcripts_fts.rowid"
+            clauses.append("transcripts_fts MATCH ?")
+            params.append(search)
         if category == "_none_":
-            where, params = "WHERE category IS NULL", (limit, offset)
-            sql = f"""SELECT id, video_id, title, duration, youtube_url,
-                      summary, relevance_score, is_flagged, is_marked_for_deletion,
-                      batch_id, created_at, archived_at, audio_path, category
-               FROM transcripts {where} ORDER BY archived_at DESC LIMIT ? OFFSET ?"""
+            clauses.append("category IS NULL")
         elif category is not None:
-            where, params = "WHERE category = ?", (category, limit, offset)
-            sql = f"""SELECT id, video_id, title, duration, youtube_url,
-                      summary, relevance_score, is_flagged, is_marked_for_deletion,
-                      batch_id, created_at, archived_at, audio_path, category
-               FROM transcripts {where} ORDER BY archived_at DESC LIMIT ? OFFSET ?"""
-        else:
-            sql = """SELECT id, video_id, title, duration, youtube_url,
-                      summary, relevance_score, is_flagged, is_marked_for_deletion,
-                      batch_id, created_at, archived_at, audio_path, category
-               FROM transcripts ORDER BY archived_at DESC LIMIT ? OFFSET ?"""
-            params = (limit, offset)
-        async with self._db.execute(sql, params) as cur:
+            clauses.append("category = ?")
+            params.append(category)
+        if tag and tag in self._TAG_CLAUSES:
+            clauses.append(self._TAG_CLAUSES[tag])
+        if batch_id is not None:
+            clauses.append("batch_id = ?")
+            params.append(batch_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"{select} {where} {order} LIMIT ? OFFSET ?"
+        params += [limit, offset]
+        async with self._db.execute(sql, tuple(params)) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
@@ -243,17 +274,24 @@ class ArchiveDB:
         d["segments"] = json.loads(d.pop("segments_json"))
         return d
 
-    async def get_triage(self, batch_id: str) -> list[dict]:
-        """Return triage entries for a batch, sorted by relevance_score DESC."""
-        async with self._db.execute(
-            """SELECT id, video_id, title, duration, summary,
-                      relevance_score, is_flagged, is_marked_for_deletion,
-                      youtube_url, batch_id
-               FROM transcripts
-               WHERE batch_id = ?
-               ORDER BY relevance_score DESC NULLS LAST, archived_at DESC""",
-            (batch_id,),
-        ) as cur:
+    async def get_triage(self, batch_id: str | None = None) -> list[dict]:
+        """Return triage entries, optionally filtered by batch_id, sorted by relevance_score DESC."""
+        if batch_id is not None:
+            sql = """SELECT id, video_id, title, duration, summary,
+                            relevance_score, is_flagged, is_marked_for_deletion, is_watched,
+                            youtube_url, batch_id, category
+                     FROM transcripts
+                     WHERE batch_id = ?
+                     ORDER BY relevance_score DESC NULLS LAST, archived_at DESC"""
+            params: tuple = (batch_id,)
+        else:
+            sql = """SELECT id, video_id, title, duration, summary,
+                            relevance_score, is_flagged, is_marked_for_deletion, is_watched,
+                            youtube_url, batch_id, category
+                     FROM transcripts
+                     ORDER BY relevance_score DESC NULLS LAST, archived_at DESC"""
+            params = ()
+        async with self._db.execute(sql, params) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
@@ -274,13 +312,21 @@ class ArchiveDB:
         await self._db.commit()
 
     async def get_summaries_by_ids(self, ids: list[int]) -> list[dict]:
-        """Return id, summary, full_text for scoring."""
+        """Return id, title, summary, full_text for scoring."""
         if not ids:
             return []
         placeholders = ",".join("?" * len(ids))
         async with self._db.execute(
-            f"SELECT id, summary, full_text FROM transcripts WHERE id IN ({placeholders})",
+            f"SELECT id, title, summary, full_text FROM transcripts WHERE id IN ({placeholders})",
             ids,
+        ) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_all_summaries(self) -> list[dict]:
+        """Return id, title, summary, full_text for all transcripts."""
+        async with self._db.execute(
+            "SELECT id, title, summary, full_text FROM transcripts ORDER BY id"
         ) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
@@ -307,6 +353,16 @@ class ArchiveDB:
         async with self._db.execute(
             "UPDATE transcripts SET is_marked_for_deletion = ? WHERE id = ? RETURNING id",
             (1 if marked else 0, row_id),
+        ) as cur:
+            row = await cur.fetchone()
+        await self._db.commit()
+        return row is not None
+
+    async def set_watched(self, row_id: int, watched: bool) -> bool:
+        """Toggle is_watched. Returns True if row was found."""
+        async with self._db.execute(
+            "UPDATE transcripts SET is_watched = ? WHERE id = ? RETURNING id",
+            (1 if watched else 0, row_id),
         ) as cur:
             row = await cur.fetchone()
         await self._db.commit()
@@ -353,14 +409,27 @@ class ArchiveDB:
             rows = await cur.fetchall()
         return {r[0] for r in rows}
 
-    async def count(self, category: str | None = None) -> int:
+    async def count(self, category: str | None = None, tag: str | None = None, batch_id: str | None = None, search: str | None = None) -> int:
+        clauses: list[str] = []
+        params: list = []
+        table = "transcripts"
+        if search:
+            table = "transcripts JOIN transcripts_fts ON transcripts.id = transcripts_fts.rowid"
+            clauses.append("transcripts_fts MATCH ?")
+            params.append(search)
         if category == "_none_":
-            sql, params = "SELECT COUNT(*) FROM transcripts WHERE category IS NULL", ()
+            clauses.append("category IS NULL")
         elif category is not None:
-            sql, params = "SELECT COUNT(*) FROM transcripts WHERE category = ?", (category,)
-        else:
-            sql, params = "SELECT COUNT(*) FROM transcripts", ()
-        async with self._db.execute(sql, params) as cur:
+            clauses.append("category = ?")
+            params.append(category)
+        if tag and tag in self._TAG_CLAUSES:
+            clauses.append(self._TAG_CLAUSES[tag])
+        if batch_id is not None:
+            clauses.append("batch_id = ?")
+            params.append(batch_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"SELECT COUNT(*) FROM {table} {where}"
+        async with self._db.execute(sql, tuple(params)) as cur:
             row = await cur.fetchone()
         return row[0]
 
