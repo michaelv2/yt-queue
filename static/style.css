@@ -773,19 +773,45 @@ td:nth-child(2) { word-break: break-word; }
 
 /* ── Mobile archive table ────────────────────────────────────────────────── */
 @media (max-width: 768px) {
+  /* Convert table to stacked card-like rows */
   table { table-layout: auto; }
-  /* Hide duration, category, score, batch, archived columns */
-  table th:nth-child(3),
+  table thead { display: none; }
+  table tbody tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  table tbody td {
+    border-bottom: none;
+    padding: 0;
+  }
+  /* Checkbox — inline before title */
+  table td:nth-child(1) {
+    flex: 0 0 auto;
+    padding-right: 8px;
+  }
+  /* Title — full remaining width of first line */
+  table td:nth-child(2) {
+    flex: 1 1 0;
+    min-width: 0;
+    font-weight: 600;
+  }
+  /* Summary — full width below title */
+  table td:nth-child(4) {
+    flex: 0 0 100%;
+    padding-top: 4px;
+    font-size: 0.8rem;
+  }
+  /* Hide duration, category, score, batch, archived */
   table td:nth-child(3),
-  table th:nth-child(5),
   table td:nth-child(5),
-  table th:nth-child(6),
   table td:nth-child(6),
-  table th:nth-child(7),
   table td:nth-child(7),
-  table th:nth-child(8),
   table td:nth-child(8) { display: none; }
-  table th:nth-child(2) { width: auto; }
+
   .archive-controls { flex-direction: column; align-items: stretch; }
   .score-controls { max-width: none; }
 }
