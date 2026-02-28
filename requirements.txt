@@ -7,6 +7,9 @@ yt-dlp>=2024.1.0
 faster-whisper>=1.0.0
 aiosqlite>=0.19.0
 
+# CLI tools
+requests>=2.31.0
+
 # Optional LLM providers — install as needed:
 #   pip install anthropic        # YTQUEUE_LLM_PROVIDER=anthropic
 #   pip install openai           # YTQUEUE_LLM_PROVIDER=openai
