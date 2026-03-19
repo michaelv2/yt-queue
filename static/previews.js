@@ -56,7 +56,7 @@ function renderGrid(items) {
       <div class="thumb-item" title="${esc(item.title)}">
         <div class="thumb-img-wrap">
           <a href="${esc(item.youtube_url)}" target="_blank" rel="noopener">
-            <img src="https://img.youtube.com/vi/${esc(vidId)}/mqdefault.jpg"
+            <img src="${item.thumbnail_url ? esc(item.thumbnail_url) : `https://img.youtube.com/vi/${esc(vidId)}/mqdefault.jpg`}"
                  alt="${esc(item.title)}" loading="lazy">
           </a>
           ${badges.length ? `<div class="thumb-overlay-badges">${badges.join('')}</div>` : ''}
@@ -78,7 +78,7 @@ async function loadBatches() {
     if (!resp.ok) return;
     const batches = await resp.json();
     const sel = document.getElementById('batch-filter');
-    batches.forEach(b => {
+    batches.filter(b => b.count > 0).forEach(b => {
       const opt = document.createElement('option');
       opt.value = b.id;
       const date = new Date(b.created_at * 1000).toLocaleDateString();

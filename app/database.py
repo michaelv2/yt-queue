@@ -104,6 +104,8 @@ class ArchiveDB:
             ("is_marked_for_deletion", "INTEGER NOT NULL DEFAULT 0"),
             ("category", "TEXT"),
             ("is_watched", "INTEGER NOT NULL DEFAULT 0"),
+            ("key_takeaways", "TEXT"),
+            ("thumbnail_url", "TEXT NOT NULL DEFAULT ''"),
         ]:
             try:
                 await self._db.execute(
@@ -177,8 +179,10 @@ class ArchiveDB:
         created_at: float,
         audio_path: str | None = None,
         summary: str = "",
+        key_takeaways: str | None = None,
         relevance_score: float | None = None,
         batch_id: str | None = None,
+        thumbnail_url: str = "",
     ) -> int:
         """Upsert a transcript. Returns the row id."""
         now = time.time()
@@ -186,8 +190,9 @@ class ArchiveDB:
             """INSERT INTO transcripts
                    (video_id, title, duration, youtube_url,
                     full_text, segments_json, created_at, archived_at,
-                    audio_path, summary, relevance_score, batch_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    audio_path, summary, key_takeaways, relevance_score, batch_id,
+                    thumbnail_url)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(video_id) DO UPDATE SET
                    title=excluded.title,
                    duration=excluded.duration,
@@ -197,12 +202,15 @@ class ArchiveDB:
                    archived_at=excluded.archived_at,
                    audio_path=COALESCE(excluded.audio_path, transcripts.audio_path),
                    summary=COALESCE(NULLIF(excluded.summary,''), transcripts.summary),
+                   key_takeaways=COALESCE(NULLIF(excluded.key_takeaways,''), transcripts.key_takeaways),
                    relevance_score=COALESCE(excluded.relevance_score, transcripts.relevance_score),
-                   batch_id=transcripts.batch_id
+                   batch_id=transcripts.batch_id,
+                   thumbnail_url=COALESCE(NULLIF(excluded.thumbnail_url,''), transcripts.thumbnail_url)
                RETURNING id""",
             (video_id, title, duration, youtube_url,
              full_text, segments_json, created_at, now,
-             audio_path, summary, relevance_score, batch_id),
+             audio_path, summary, key_takeaways, relevance_score, batch_id,
+             thumbnail_url),
         ) as cur:
             row = await cur.fetchone()
         await self._db.commit()
@@ -237,8 +245,9 @@ class ArchiveDB:
         qualified_col = f"transcripts.{col}"
         order = f"ORDER BY {qualified_col} IS NULL, {qualified_col} {direction}"
         select = """SELECT transcripts.id, video_id, transcripts.title, duration, youtube_url,
-                      transcripts.summary, relevance_score, is_flagged, is_marked_for_deletion,
-                      is_watched, batch_id, created_at, archived_at, audio_path, category
+                      transcripts.summary, key_takeaways, relevance_score, is_flagged,
+                      is_marked_for_deletion, is_watched, batch_id, created_at, archived_at,
+                      audio_path, category, thumbnail_url
                FROM transcripts"""
         clauses: list[str] = []
         params: list = []
@@ -277,17 +286,17 @@ class ArchiveDB:
     async def get_triage(self, batch_id: str | None = None) -> list[dict]:
         """Return triage entries, optionally filtered by batch_id, sorted by relevance_score DESC."""
         if batch_id is not None:
-            sql = """SELECT id, video_id, title, duration, summary,
+            sql = """SELECT id, video_id, title, duration, summary, key_takeaways,
                             relevance_score, is_flagged, is_marked_for_deletion, is_watched,
-                            youtube_url, batch_id, category
+                            youtube_url, batch_id, category, thumbnail_url
                      FROM transcripts
                      WHERE batch_id = ?
                      ORDER BY relevance_score DESC NULLS LAST, archived_at DESC"""
             params: tuple = (batch_id,)
         else:
-            sql = """SELECT id, video_id, title, duration, summary,
+            sql = """SELECT id, video_id, title, duration, summary, key_takeaways,
                             relevance_score, is_flagged, is_marked_for_deletion, is_watched,
-                            youtube_url, batch_id, category
+                            youtube_url, batch_id, category, thumbnail_url
                      FROM transcripts
                      ORDER BY relevance_score DESC NULLS LAST, archived_at DESC"""
             params = ()
@@ -331,11 +340,17 @@ class ArchiveDB:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
 
-    async def update_summary(self, row_id: int, summary: str) -> None:
-        await self._db.execute(
-            "UPDATE transcripts SET summary = ? WHERE id = ?",
-            (summary, row_id),
-        )
+    async def update_summary(self, row_id: int, summary: str, key_takeaways: str | None = None) -> None:
+        if key_takeaways is not None:
+            await self._db.execute(
+                "UPDATE transcripts SET summary = ?, key_takeaways = ? WHERE id = ?",
+                (summary, key_takeaways, row_id),
+            )
+        else:
+            await self._db.execute(
+                "UPDATE transcripts SET summary = ? WHERE id = ?",
+                (summary, row_id),
+            )
         await self._db.commit()
 
     async def set_flagged(self, row_id: int, flagged: bool) -> bool:

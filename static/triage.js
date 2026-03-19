@@ -159,7 +159,7 @@ function cardHtml(entry) {
     entry.is_flagged ? 'flagged' : '',
     entry.is_marked_for_deletion ? 'marked-for-deletion' : '',
   ].filter(Boolean).join(' ');
-  const thumbUrl = `https://img.youtube.com/vi/${esc(entry.video_id)}/mqdefault.jpg`;
+  const thumbUrl = entry.thumbnail_url || `https://img.youtube.com/vi/${esc(entry.video_id)}/mqdefault.jpg`;
   return `
     <div class="card ${cardClass}" data-id="${entry.id}">
       <a href="${esc(entry.youtube_url)}" target="_blank" rel="noopener" class="card-thumb-link">
@@ -192,6 +192,12 @@ function cardHtml(entry) {
         </h3>
         ${entry.duration ? `<span class="card-duration">${fmtDuration(entry.duration)}</span>` : ''}
         <p class="card-summary">${esc(entry.summary) || '<em>No summary available</em>'}</p>
+        ${(entry.key_takeaways && entry.key_takeaways.length > 0)
+          ? `<details class="card-takeaways">
+               <summary>Key takeaways (${entry.key_takeaways.length})</summary>
+               <ul>${entry.key_takeaways.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
+             </details>`
+          : ''}
         <div class="card-footer">
           <button class="transcript-btn" data-id="${entry.id}">View transcript</button>
           <a href="${esc(entry.youtube_url)}" target="_blank" rel="noopener" class="watch-btn">Watch →</a>
@@ -334,6 +340,38 @@ document.getElementById('filter-select').addEventListener('change', render);
 document.getElementById('sort-select').addEventListener('change', render);
 document.getElementById('category-filter').addEventListener('change', render);
 
+async function loadBatches() {
+  try {
+    const resp = await fetch('/api/batches');
+    if (!resp.ok) return;
+    const batches = await resp.json();
+    const sel = document.getElementById('batch-filter');
+    batches.filter(b => b.count > 0).forEach(b => {
+      const opt = document.createElement('option');
+      opt.value = b.id;
+      const date = new Date(b.created_at * 1000).toLocaleDateString();
+      const label = b.sample_titles && b.sample_titles.length > 0
+        ? b.sample_titles[0].slice(0, 30) + (b.sample_titles[0].length > 30 ? '…' : '')
+        : b.id.slice(0, 8) + '…';
+      opt.textContent = `${label} (${date}, ${b.count})`;
+      sel.appendChild(opt);
+    });
+    // Pre-select current batch if one is active
+    if (batchId) sel.value = batchId;
+  } catch (e) {
+    console.warn('Batch load error:', e);
+  }
+}
+
+document.getElementById('batch-filter').addEventListener('change', (e) => {
+  const val = e.target.value;
+  if (val) {
+    location.href = `/triage.html?batch=${val}`;
+  } else {
+    location.href = '/triage.html';
+  }
+});
+
 async function loadCategories() {
   try {
     const resp = await fetch('/api/categories');
@@ -388,6 +426,7 @@ if (batchId) {
   loadTriage();
 }
 
+loadBatches();
 loadCategories();
 
 // ── Transcript modal ──────────────────────────────────────────────────────────
@@ -414,6 +453,12 @@ function showModal(data) {
   const duration = data.duration ? fmtDuration(data.duration) : '';
   const wordCount = data.full_text ? data.full_text.split(/\s+/).filter(Boolean).length : 0;
   const savedTs = localStorage.getItem('ytqueue_show_timestamps') === 'true';
+  const takeawaysBlock = (data.key_takeaways && data.key_takeaways.length > 0)
+    ? `<div class="modal-takeaways">
+         <h4>Key Takeaways</h4>
+         <ul>${data.key_takeaways.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
+       </div>`
+    : '';
 
   backdrop.innerHTML = `
     <div class="modal" role="dialog" aria-modal="true">
@@ -433,6 +478,7 @@ function showModal(data) {
         <div class="transcript-meta">
           ${duration ? duration + ' · ' : ''}${wordCount.toLocaleString()} words
         </div>
+        ${takeawaysBlock}
         ${data.has_audio ? `<audio id="modal-audio-player" controls src="/api/archive/${data.id}/audio" style="width:100%;margin-bottom:12px;"></audio>` : ''}
         <div class="transcript-body" id="transcript-body"></div>
       </div>
@@ -468,7 +514,8 @@ function showModal(data) {
         } else {
           const t = Math.floor(seg.start);
           timeSpan.addEventListener('click', () => {
-            window.open(data.youtube_url + '&t=' + t, '_blank', 'noopener');
+            const sep = data.youtube_url.includes('vimeo.com') ? '#t=' : '&t=';
+            window.open(data.youtube_url + sep + t, '_blank', 'noopener');
           });
         }
 

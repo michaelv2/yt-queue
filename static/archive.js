@@ -150,6 +150,12 @@ function showModal(data) {
   const duration = data.duration ? fmtDuration(data.duration) : '';
   const wordCount = data.full_text ? data.full_text.split(/\s+/).filter(Boolean).length : 0;
   const savedTs = localStorage.getItem('ytqueue_show_timestamps') === 'true';
+  const takeawaysBlock = (data.key_takeaways && data.key_takeaways.length > 0)
+    ? `<div class="modal-takeaways">
+         <h4>Key Takeaways</h4>
+         <ul>${data.key_takeaways.map(t => `<li>${esc(t)}</li>`).join('')}</ul>
+       </div>`
+    : '';
 
   backdrop.innerHTML = `
     <div class="modal" role="dialog" aria-modal="true">
@@ -169,6 +175,7 @@ function showModal(data) {
         <div class="transcript-meta">
           ${duration ? duration + ' · ' : ''}${wordCount.toLocaleString()} words
         </div>
+        ${takeawaysBlock}
         ${data.has_audio ? `<audio id="modal-audio-player" controls src="/api/archive/${data.id}/audio" style="width:100%;margin-bottom:12px;"></audio>` : ''}
         <div class="transcript-body" id="transcript-body"></div>
       </div>
@@ -204,7 +211,8 @@ function showModal(data) {
         } else {
           const t = Math.floor(seg.start);
           timeSpan.addEventListener('click', () => {
-            window.open(data.youtube_url + '&t=' + t, '_blank', 'noopener');
+            const sep = data.youtube_url.includes('vimeo.com') ? '#t=' : '&t=';
+            window.open(data.youtube_url + sep + t, '_blank', 'noopener');
           });
         }
 

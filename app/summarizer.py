@@ -25,7 +25,8 @@ def _extract_json(text: str):
 
 
 class BaseLLM:
-    def summarize(self, transcript: str, max_words: int = 80) -> str:
+    def summarize(self, transcript: str, max_words: int = 80) -> dict:
+        """Return {"summary": "...", "takeaways": ["...", ...]}"""
         raise NotImplementedError
 
     def score_relevance(self, summary: str, criteria: str) -> float:
@@ -44,8 +45,8 @@ class BaseLLM:
 class NullLLM(BaseLLM):
     """No-op — used when llm_provider='none'."""
 
-    def summarize(self, transcript: str, max_words: int = 80) -> str:
-        return ""
+    def summarize(self, transcript: str, max_words: int = 80) -> dict:
+        return {"summary": "", "takeaways": []}
 
     def score_relevance(self, summary: str, criteria: str) -> float:
         return 0.0
@@ -63,23 +64,33 @@ class AnthropicLLM(BaseLLM):
         self._client = anthropic.Anthropic(api_key=api_key)
         self._model = model
 
-    def summarize(self, transcript: str, max_words: int = 80) -> str:
+    def summarize(self, transcript: str, max_words: int = 80) -> dict:
         prompt = (
-            f"Produce a ≤{max_words}-word plain-English summary of this YouTube video transcript. "
-            "Include the main topic, key points, and tone. "
-            "Return only the summary text, no preamble.\n\n"
+            "Analyze this YouTube video transcript and return a JSON object with two fields:\n"
+            f'1. "summary": A ≤{max_words}-word plain-English summary covering the main topic, key points, and tone.\n'
+            '2. "takeaways": An array of specific, actionable takeaways or key points '
+            "(vary the count based on content — fewer for simple videos, more for dense ones). "
+            "Each should be a single concise sentence capturing a distinct insight, strategy, or recommendation.\n\n"
+            "Return ONLY valid JSON, no other text.\n\n"
             f"Transcript:\n{transcript[:12000]}"
         )
         try:
             msg = self._client.messages.create(
                 model=self._model,
-                max_tokens=200,
+                max_tokens=600,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return msg.content[0].text.strip()
+            raw = msg.content[0].text.strip()
+            parsed = _extract_json(raw)
+            if isinstance(parsed, dict) and "summary" in parsed:
+                return {
+                    "summary": parsed.get("summary", ""),
+                    "takeaways": parsed.get("takeaways", []),
+                }
+            return {"summary": raw, "takeaways": []}
         except Exception as e:
             log.warning("AnthropicLLM.summarize failed: %s", e)
-            return ""
+            return {"summary": "", "takeaways": []}
 
     def score_relevance(self, summary: str, criteria: str) -> float:
         prompt = (
@@ -159,23 +170,33 @@ class OpenAILLM(BaseLLM):
         self._client = OpenAI(**kwargs)
         self._model = model
 
-    def summarize(self, transcript: str, max_words: int = 80) -> str:
+    def summarize(self, transcript: str, max_words: int = 80) -> dict:
         prompt = (
-            f"Produce a ≤{max_words}-word plain-English summary of this YouTube video transcript. "
-            "Include the main topic, key points, and tone. "
-            "Return only the summary text, no preamble.\n\n"
+            "Analyze this YouTube video transcript and return a JSON object with two fields:\n"
+            f'1. "summary": A ≤{max_words}-word plain-English summary covering the main topic, key points, and tone.\n'
+            '2. "takeaways": An array of specific, actionable takeaways or key points '
+            "(vary the count based on content — fewer for simple videos, more for dense ones). "
+            "Each should be a single concise sentence capturing a distinct insight, strategy, or recommendation.\n\n"
+            "Return ONLY valid JSON, no other text.\n\n"
             f"Transcript:\n{transcript[:12000]}"
         )
         try:
             resp = self._client.chat.completions.create(
                 model=self._model,
-                max_tokens=200,
+                max_tokens=600,
                 messages=[{"role": "user", "content": prompt}],
             )
-            return resp.choices[0].message.content.strip()
+            raw = resp.choices[0].message.content.strip()
+            parsed = _extract_json(raw)
+            if isinstance(parsed, dict) and "summary" in parsed:
+                return {
+                    "summary": parsed.get("summary", ""),
+                    "takeaways": parsed.get("takeaways", []),
+                }
+            return {"summary": raw, "takeaways": []}
         except Exception as e:
             log.warning("OpenAILLM.summarize failed: %s", e)
-            return ""
+            return {"summary": "", "takeaways": []}
 
     def score_relevance(self, summary: str, criteria: str) -> float:
         prompt = (
@@ -286,18 +307,28 @@ class OllamaLLM(BaseLLM):
             raw = json.loads(resp.read())["message"]["content"]
         return _strip_think_tags(raw)
 
-    def summarize(self, transcript: str, max_words: int = 80) -> str:
+    def summarize(self, transcript: str, max_words: int = 80) -> dict:
         user = (
-            "Write 2-3 sentences capturing what this video covers and why it's interesting. "
-            "Your sentences should build on each other — start broad, then get specific. "
-            "Plain prose only, no lists.\n\n"
+            "Analyze this YouTube video transcript and return a JSON object with two fields:\n"
+            f'1. "summary": A ≤{max_words}-word plain-English summary covering the main topic, key points, and tone.\n'
+            '2. "takeaways": An array of specific, actionable takeaways or key points '
+            "(vary the count based on content — fewer for simple videos, more for dense ones). "
+            "Each should be a single concise sentence capturing a distinct insight, strategy, or recommendation.\n\n"
+            "Return ONLY valid JSON, no other text.\n\n"
             f"Transcript:\n{transcript[:12000]}"
         )
         try:
-            return self._chat(self._SYSTEM, user)
+            raw = self._chat(self._SYSTEM, user)
+            parsed = _extract_json(raw)
+            if isinstance(parsed, dict) and "summary" in parsed:
+                return {
+                    "summary": parsed.get("summary", ""),
+                    "takeaways": parsed.get("takeaways", []),
+                }
+            return {"summary": raw, "takeaways": []}
         except Exception as e:
             log.warning("OllamaLLM.summarize failed: %s", e)
-            return ""
+            return {"summary": "", "takeaways": []}
 
     def score_relevance(self, summary: str, criteria: str) -> float:
         user = (

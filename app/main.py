@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import uuid
@@ -35,27 +36,54 @@ from .models import (
 )
 from .summarizer import get_llm
 
+def _parse_takeaways(raw) -> list[str]:
+    """Parse key_takeaways from DB (JSON string or None) into a list."""
+    if not raw:
+        return []
+    try:
+        val = json.loads(raw)
+        return val if isinstance(val, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 log = logging.getLogger(__name__)
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = PROJECT_DIR / "static"
 
-# ── YouTube URL/ID parsing ────────────────────────────────────────────────────
+# ── Video URL/ID parsing ─────────────────────────────────────────────────────
 
 _YT_PATTERNS = [
     re.compile(r"(?:youtube\.com/watch\?.*v=|youtu\.be/|youtube\.com/embed/)([A-Za-z0-9_-]{11})"),
     re.compile(r"^([A-Za-z0-9_-]{11})$"),
 ]
 
+_VIMEO_PATTERNS = [
+    re.compile(r"vimeo\.com/(\d+)"),
+    re.compile(r"player\.vimeo\.com/video/(\d+)"),
+]
 
-def extract_video_id(url: str) -> str:
+
+def parse_video_url(url: str) -> tuple[str, str]:
+    """Extract (video_id, source_url) from a YouTube or Vimeo URL.
+
+    video_id is used for dedup and file naming.
+    Vimeo IDs are prefixed with 'vimeo_' to avoid collisions with YouTube IDs.
+    """
     url = url.strip()
     for pat in _YT_PATTERNS:
         m = pat.search(url)
         if m:
-            return m.group(1)
-    raise ValueError(f"Could not extract YouTube video ID from: {url}")
+            vid = m.group(1)
+            return vid, f"https://www.youtube.com/watch?v={vid}"
+    for pat in _VIMEO_PATTERNS:
+        m = pat.search(url)
+        if m:
+            vid = m.group(1)
+            return f"vimeo_{vid}", f"https://vimeo.com/{vid}"
+    raise ValueError(f"Could not parse video URL: {url}")
 
 
 def parse_urls(raw: list[str]) -> list[str]:
@@ -102,7 +130,7 @@ app = FastAPI(title="yt-queue", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://www.youtube.com", "https://youtu.be"],
+    allow_origins=["https://www.youtube.com", "https://youtu.be", "https://vimeo.com"],
     allow_methods=["POST"],
     allow_headers=["Content-Type"],
 )
@@ -132,24 +160,28 @@ async def create_batch(req: BatchSubmitRequest) -> BatchSubmitResponse:
     if not urls:
         raise HTTPException(status_code=400, detail="No URLs provided")
 
-    video_ids: list[str] = []
+    parsed: list[tuple[str, str]] = []  # (video_id, source_url)
     errors: list[str] = []
     for url in urls:
         try:
-            video_ids.append(extract_video_id(url))
+            parsed.append(parse_video_url(url))
         except ValueError as e:
             errors.append(str(e))
 
-    if not video_ids:
-        raise HTTPException(status_code=400, detail=f"No valid YouTube URLs. Errors: {errors}")
+    if not parsed:
+        raise HTTPException(status_code=400, detail=f"No valid video URLs. Errors: {errors}")
 
     # Deduplicate while preserving order
     seen: set[str] = set()
-    unique_ids = [vid for vid in video_ids if not (vid in seen or seen.add(vid))]
+    unique: list[tuple[str, str]] = []
+    for vid, src in parsed:
+        if vid not in seen:
+            seen.add(vid)
+            unique.append((vid, src))
 
     # Skip videos already in the archive
-    already_archived = await archive_db.get_archived_by_video_ids(unique_ids)
-    new_ids = [vid for vid in unique_ids if vid not in already_archived]
+    already_archived = await archive_db.get_archived_by_video_ids([v for v, _ in unique])
+    new_items = [(vid, src) for vid, src in unique if vid not in already_archived]
     skipped = len(already_archived)
     if skipped:
         log.info("Batch skipping %d already-archived video(s)", skipped)
@@ -158,8 +190,8 @@ async def create_batch(req: BatchSubmitRequest) -> BatchSubmitResponse:
     await archive_db.create_batch(batch_id, filter_criteria=req.filter_criteria)
 
     job_ids: list[str] = []
-    for video_id in new_ids:
-        job = await store.create(video_id=video_id, batch_id=batch_id)
+    for video_id, source_url in new_items:
+        job = await store.create(video_id=video_id, batch_id=batch_id, source_url=source_url)
         batch_store.add_job(batch_id, job.id)
         job_ids.append(job.id)
         await runner.submit(job, filter_criteria=req.filter_criteria)
@@ -246,10 +278,15 @@ async def _run_summarize_batch(batch_id: str) -> None:
         log.info("Re-summarizing %d transcripts for batch %s", len(rows), batch_id)
         for row in rows:
             try:
-                summary = await loop.run_in_executor(
+                result = await loop.run_in_executor(
                     None, llm.summarize, row["full_text"], settings.summary_max_words
                 )
-                await archive_db.update_summary(row["id"], summary)
+                summary = result.get("summary", "") if isinstance(result, dict) else str(result)
+                takeaways = result.get("takeaways", []) if isinstance(result, dict) else []
+                await archive_db.update_summary(
+                    row["id"], summary,
+                    key_takeaways=json.dumps(takeaways) if takeaways else None,
+                )
             except Exception:
                 log.warning("Failed to summarize row %d", row["id"], exc_info=True)
     finally:
@@ -279,28 +316,32 @@ async def summarize_batch_status(batch_id: str):
 # ── Triage route ──────────────────────────────────────────────────────────────
 
 
+def _triage_entry(r: dict, prev_deleted: set[str]) -> TriageEntry:
+    return TriageEntry(
+        id=r["id"],
+        video_id=r["video_id"],
+        title=r["title"],
+        duration=r["duration"],
+        summary=r["summary"] or "",
+        key_takeaways=_parse_takeaways(r.get("key_takeaways")),
+        relevance_score=r["relevance_score"],
+        is_flagged=bool(r["is_flagged"]),
+        is_marked_for_deletion=bool(r["is_marked_for_deletion"]),
+        is_watched=bool(r.get("is_watched", 0)),
+        youtube_url=r["youtube_url"],
+        batch_id=r.get("batch_id"),
+        category=r.get("category"),
+        was_previously_deleted=r["video_id"] in prev_deleted,
+        thumbnail_url=r.get("thumbnail_url", ""),
+    )
+
+
 @app.get("/api/triage")
 async def get_triage_global() -> list[TriageEntry]:
     rows = await archive_db.get_triage()
     video_ids = [r["video_id"] for r in rows]
     prev_deleted = await archive_db.get_previously_deleted(video_ids)
-    return [
-        TriageEntry(
-            id=r["id"],
-            video_id=r["video_id"],
-            title=r["title"],
-            duration=r["duration"],
-            summary=r["summary"] or "",
-            relevance_score=r["relevance_score"],
-            is_flagged=bool(r["is_flagged"]),
-            is_marked_for_deletion=bool(r["is_marked_for_deletion"]),
-            youtube_url=r["youtube_url"],
-            batch_id=r.get("batch_id"),
-            category=r.get("category"),
-            was_previously_deleted=r["video_id"] in prev_deleted,
-        )
-        for r in rows
-    ]
+    return [_triage_entry(r, prev_deleted) for r in rows]
 
 
 @app.get("/api/triage/{batch_id}")
@@ -308,23 +349,7 @@ async def get_triage(batch_id: str) -> list[TriageEntry]:
     rows = await archive_db.get_triage(batch_id)
     video_ids = [r["video_id"] for r in rows]
     prev_deleted = await archive_db.get_previously_deleted(video_ids)
-    return [
-        TriageEntry(
-            id=r["id"],
-            video_id=r["video_id"],
-            title=r["title"],
-            duration=r["duration"],
-            summary=r["summary"] or "",
-            relevance_score=r["relevance_score"],
-            is_flagged=bool(r["is_flagged"]),
-            is_marked_for_deletion=bool(r["is_marked_for_deletion"]),
-            youtube_url=r["youtube_url"],
-            batch_id=r.get("batch_id"),
-            category=r.get("category"),
-            was_previously_deleted=r["video_id"] in prev_deleted,
-        )
-        for r in rows
-    ]
+    return [_triage_entry(r, prev_deleted) for r in rows]
 
 
 @app.post("/api/archive/{row_id}/flag")
@@ -373,8 +398,10 @@ async def list_archive(
     total = await archive_db.count(category=category, tag=tag, batch_id=batch_id, search=search)
     entries = [
         ArchiveEntry(
-            **{k: v for k, v in item.items() if k not in ("audio_path",)},
+            **{k: v for k, v in item.items() if k not in ("audio_path", "key_takeaways", "thumbnail_url")},
+            key_takeaways=_parse_takeaways(item.get("key_takeaways")),
             has_audio=bool(item.get("audio_path")),
+            thumbnail_url=item.get("thumbnail_url", ""),
         )
         for item in items
     ]
@@ -400,6 +427,7 @@ async def get_archive_transcript(row_id: int) -> ArchiveTranscriptResponse:
         full_text=record["full_text"],
         segments=[TranscriptSegment(**s) for s in record["segments"]],
         summary=record.get("summary"),
+        key_takeaways=_parse_takeaways(record.get("key_takeaways")),
         relevance_score=record.get("relevance_score"),
         is_flagged=bool(record.get("is_flagged", 0)),
         batch_id=record.get("batch_id"),
@@ -562,20 +590,20 @@ _previews: dict[str, dict] = {}
 @app.post("/api/batches/preview")
 async def preview_batch(req: BatchSubmitRequest):
     urls = parse_urls(req.urls)
-    video_ids: list[str] = []
+    parsed: list[tuple[str, str]] = []
     errors: list[str] = []
     for url in urls:
         try:
-            video_ids.append(extract_video_id(url))
+            parsed.append(parse_video_url(url))
         except ValueError as e:
             errors.append(str(e))
     seen: set[str] = set()
-    unique_ids = [vid for vid in video_ids if not (vid in seen or seen.add(vid))]
+    unique = [(vid, src) for vid, src in parsed if not (vid in seen or seen.add(vid))]
     preview_id = uuid.uuid4().hex[:16]
     _previews[preview_id] = {
-        "count": len(unique_ids),
-        "duplicates": len(video_ids) - len(unique_ids),
-        "video_ids": unique_ids,
+        "count": len(unique),
+        "duplicates": len(parsed) - len(unique),
+        "video_ids": [vid for vid, _ in unique],
         "errors": errors,
     }
     return {"preview_id": preview_id}

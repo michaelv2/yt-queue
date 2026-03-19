@@ -26,6 +26,7 @@ class Job(BaseModel):
     id: str
     video_id: str
     batch_id: str
+    source_url: str = ""
     status: JobStatus = JobStatus.queued
     progress: float = 0.0
     title: str | None = None
@@ -34,14 +35,17 @@ class Job(BaseModel):
     segments: list[TranscriptSegment] = []
     created_at: float
     summary: str = ""
+    key_takeaways: list[str] = []
     relevance_score: float | None = None
+    thumbnail_url: str = ""
 
     @staticmethod
-    def create(video_id: str, batch_id: str) -> Job:
+    def create(video_id: str, batch_id: str, source_url: str = "") -> Job:
         return Job(
             id=uuid.uuid4().hex[:12],
             video_id=video_id,
             batch_id=batch_id,
+            source_url=source_url,
             created_at=time.time(),
         )
 
@@ -88,6 +92,7 @@ class TriageEntry(BaseModel):
     title: str
     duration: float
     summary: str
+    key_takeaways: list[str] = []
     relevance_score: float | None
     is_flagged: bool
     is_marked_for_deletion: bool
@@ -96,6 +101,7 @@ class TriageEntry(BaseModel):
     batch_id: str | None
     category: str | None = None
     was_previously_deleted: bool = False
+    thumbnail_url: str = ""
 
 
 # ── Archive models ────────────────────────────────────────────────────────────
@@ -108,6 +114,7 @@ class ArchiveEntry(BaseModel):
     duration: float
     youtube_url: str
     summary: str | None = None
+    key_takeaways: list[str] = []
     relevance_score: float | None = None
     is_flagged: bool = False
     is_marked_for_deletion: bool = False
@@ -117,6 +124,7 @@ class ArchiveEntry(BaseModel):
     archived_at: float
     has_audio: bool = False
     category: str | None = None
+    thumbnail_url: str = ""
 
 
 class ArchiveListResponse(BaseModel):
@@ -133,6 +141,7 @@ class ArchiveTranscriptResponse(BaseModel):
     full_text: str
     segments: list[TranscriptSegment]
     summary: str | None = None
+    key_takeaways: list[str] = []
     relevance_score: float | None = None
     is_flagged: bool = False
     batch_id: str | None = None

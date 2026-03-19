@@ -377,6 +377,21 @@ select:focus { outline: none; border-color: var(--accent); }
 .card-summary { font-size: 0.82rem; color: var(--text-muted); line-height: 1.5; flex: 1; }
 .card-summary em { opacity: 0.5; }
 
+/* Key takeaways on triage cards */
+.card-takeaways { margin-top: 4px; font-size: 0.82rem; color: var(--text-muted); }
+.card-takeaways > summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 500;
+  font-size: 0.78rem;
+  list-style: none;
+}
+.card-takeaways > summary::-webkit-details-marker { display: none; }
+.card-takeaways > summary::before { content: '▸ '; }
+.card-takeaways[open] > summary::before { content: '▾ '; }
+.card-takeaways ul { margin: 6px 0 0 16px; list-style: disc; }
+.card-takeaways li { margin-bottom: 3px; color: var(--text); line-height: 1.4; }
+
 .card-footer {
   display: flex;
   align-items: center;
@@ -673,6 +688,22 @@ td:nth-child(2) { word-break: break-word; }
   padding-bottom: 12px;
   border-bottom: 1px solid var(--border);
 }
+
+/* Key takeaways in transcript modals */
+.modal-takeaways {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: var(--surface2);
+  border-radius: var(--radius);
+}
+.modal-takeaways h4 {
+  margin-bottom: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.modal-takeaways ul { margin-left: 16px; list-style: disc; }
+.modal-takeaways li { margin-bottom: 4px; font-size: 0.85rem; line-height: 1.5; }
 
 /* ── Confirm modal ───────────────────────────────────────────────────────── */
 .modal-sm { max-width: 380px; }

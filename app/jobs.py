@@ -27,9 +27,9 @@ class JobStore:
     async def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
 
-    async def create(self, video_id: str, batch_id: str) -> Job:
+    async def create(self, video_id: str, batch_id: str, source_url: str = "") -> Job:
         async with self._lock:
-            job = Job.create(video_id=video_id, batch_id=batch_id)
+            job = Job.create(video_id=video_id, batch_id=batch_id, source_url=source_url)
             self._jobs[job.id] = job
             return job
 
@@ -135,9 +135,11 @@ class JobRunner:
                 job.status = JobStatus.downloading
                 job.progress = 0.05
                 await self.store.update(job)
-                info = await loop.run_in_executor(None, downloader.fetch_info, job.video_id)
+                info = await loop.run_in_executor(None, downloader.fetch_info, job.source_url)
                 job.title = info["title"]
                 job.duration = info["duration"]
+                if not job.thumbnail_url and info.get("thumbnail"):
+                    job.thumbnail_url = info["thumbnail"]
             transcribe_path = ogg_file
             job.progress = 0.35
             await self.store.update(job)
@@ -146,11 +148,12 @@ class JobRunner:
             job.progress = 0.1
             await self.store.update(job)
 
-            wav_path, title, duration = await loop.run_in_executor(
-                None, downloader.download_audio, job.video_id, tmp_dir
+            wav_path, title, duration, thumbnail = await loop.run_in_executor(
+                None, downloader.download_audio, job.source_url, job.video_id, tmp_dir
             )
             job.title = title
             job.duration = duration
+            job.thumbnail_url = thumbnail
             job.progress = 0.25
             await self.store.update(job)
 
@@ -194,14 +197,18 @@ class JobRunner:
         await self.store.update(job)
 
         summary = ""
+        key_takeaways = []
         relevance_score = None
         if self.llm is not None:
             try:
                 llm = self.llm
-                summary = await loop.run_in_executor(
+                result = await loop.run_in_executor(
                     None, llm.summarize, full_text, settings.summary_max_words
                 )
+                summary = result.get("summary", "") if isinstance(result, dict) else str(result)
+                key_takeaways = result.get("takeaways", []) if isinstance(result, dict) else []
                 job.summary = summary
+                job.key_takeaways = key_takeaways
                 await self.store.update(job)
             except Exception:
                 log.warning("Summarization failed for job %s", job.id, exc_info=True)
@@ -233,14 +240,16 @@ class JobRunner:
                     video_id=job.video_id,
                     title=job.title or job.video_id,
                     duration=job.duration or 0.0,
-                    youtube_url=f"https://www.youtube.com/watch?v={job.video_id}",
+                    youtube_url=job.source_url,
                     full_text=full_text,
                     segments_json=segments_json,
                     created_at=job.created_at,
                     audio_path=f"audio/{job.video_id}.ogg" if ogg_file.exists() else None,
                     summary=summary,
+                    key_takeaways=json.dumps(key_takeaways) if key_takeaways else None,
                     relevance_score=relevance_score,
                     batch_id=job.batch_id,
+                    thumbnail_url=job.thumbnail_url,
                 )
                 log.info("Job %s archived to DB", job.id)
             except Exception:

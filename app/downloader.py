@@ -1,4 +1,4 @@
-"""yt-dlp wrapper — download YouTube audio as WAV."""
+"""yt-dlp wrapper — download video audio as WAV (YouTube, Vimeo, etc.)."""
 
 from __future__ import annotations
 
@@ -23,25 +23,27 @@ def _find_ffmpeg() -> str | None:
         return None
 
 
-def fetch_info(video_id: str) -> dict:
-    """Fetch title and duration without downloading."""
+def fetch_info(url: str) -> dict:
+    """Fetch title, duration, and thumbnail without downloading."""
     import yt_dlp
-    url = f"https://www.youtube.com/watch?v={video_id}"
     with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
         info = ydl.extract_info(url, download=False)
-    return {"title": info.get("title", video_id), "duration": float(info.get("duration") or 0)}
+    return {
+        "title": info.get("title", ""),
+        "duration": float(info.get("duration") or 0),
+        "thumbnail": info.get("thumbnail", ""),
+    }
 
 
-def download_audio(video_id: str, output_dir: Path) -> tuple[Path, str, float]:
-    """Download audio for a YouTube video.
+def download_audio(url: str, video_id: str, output_dir: Path) -> tuple[Path, str, float, str]:
+    """Download audio for a video (YouTube, Vimeo, or any yt-dlp-supported site).
 
-    Returns (audio_path, title, duration_seconds).
+    Returns (audio_path, title, duration_seconds, thumbnail_url).
     Raises ValueError if the video exceeds max duration.
     """
     import yt_dlp
 
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    output_template = str(output_dir / "%(id)s.%(ext)s")
+    output_template = str(output_dir / f"{video_id}.%(ext)s")
     ffmpeg_path = _find_ffmpeg()
 
     # First pass: extract info to check duration
@@ -53,6 +55,7 @@ def download_audio(video_id: str, output_dir: Path) -> tuple[Path, str, float]:
 
     duration = info.get("duration") or 0
     title = info.get("title", video_id)
+    thumbnail = info.get("thumbnail", "")
 
     if duration > settings.max_duration_seconds:
         raise ValueError(
@@ -88,4 +91,4 @@ def download_audio(video_id: str, output_dir: Path) -> tuple[Path, str, float]:
             raise FileNotFoundError(f"Downloaded audio not found for {video_id}")
 
     log.info("Downloaded '%s' (%ds) → %s", title, duration, audio_path)
-    return audio_path, title, float(duration)
+    return audio_path, title, float(duration), thumbnail
