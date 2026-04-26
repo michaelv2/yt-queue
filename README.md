@@ -1,4 +1,4 @@
-# yt-queue
+# YT-Queue
 
 Self-hosted YouTube playlist manager with Whisper transcription, LLM summarization, and triage UI -- the smarter way to browse.
 
