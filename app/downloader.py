@@ -18,26 +18,9 @@ def _find_ffmpeg() -> str | None:
         return path
     try:
         import imageio_ffmpeg
-        exe = imageio_ffmpeg.get_ffmpeg_exe()
-        if exe and Path(exe).exists():
-            return exe
-    except (ImportError, Exception):
-        pass
-
-    # Last resort: try to install imageio-ffmpeg inline if possible
-    try:
-        import subprocess
-        log.warning("ffmpeg not found in PATH, attempting to install imageio-ffmpeg...")
-        subprocess.run(["pip", "install", "imageio-ffmpeg>=0.5.0"], check=True, capture_output=True)
-        import imageio_ffmpeg
-        exe = imageio_ffmpeg.get_ffmpeg_exe()
-        if exe and Path(exe).exists():
-            log.info("ffmpeg installed and located at: %s", exe)
-            return exe
-    except Exception as e:
-        log.error("Failed to install imageio-ffmpeg: %s", e)
-
-    return None
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except ImportError:
+        return None
 
 
 def fetch_info(url: str) -> dict:

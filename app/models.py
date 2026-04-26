@@ -14,7 +14,6 @@ class JobStatus(str, enum.Enum):
     summarizing = "summarizing"
     completed = "completed"
     failed = "failed"
-    cancelled = "cancelled"
 
 
 class TranscriptSegment(BaseModel):

@@ -16,13 +16,6 @@ _models: dict = {}
 _ARTIFACT_TEXTS = {"you", "thank you", "thanks for watching"}
 
 
-def _resolve_device(device: str) -> str:
-    """Map device names; pass through to faster-whisper as-is."""
-    if device == "metal":
-        return "mps"
-    return device
-
-
 def get_model(
     name: str | None = None,
     device: str | None = None,
@@ -30,7 +23,7 @@ def get_model(
 ):
     """Lazily load and cache a faster-whisper model."""
     name = name or settings.whisper_model
-    device = _resolve_device(device or settings.whisper_device)
+    device = device or settings.whisper_device
     compute_type = compute_type or settings.whisper_compute_type
 
     key = (name, device, compute_type)

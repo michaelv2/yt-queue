@@ -5,18 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>yt-queue</title>
   <link rel="stylesheet" href="/style.css">
-  <script>(function(){var t=localStorage.getItem('ytqueue_theme');if(t)document.documentElement.setAttribute('data-theme',t);})();</script>
 </head>
 <body>
   <header>
     <h1>yt-queue</h1>
     <nav>
       <a href="/" class="active">Submit</a>
-      <a href="/progress.html">Progress</a>
       <a href="/triage.html">Previews</a>
       <a href="/previews.html">Thumbnails</a>
       <a href="/archive.html">Archive</a>
-      <a href="/settings.html">Settings</a>
     </nav>
   </header>
 
@@ -49,12 +46,9 @@
 
     <details id="bookmarklet-section" class="collapsible-section">
       <summary>Bookmarklet</summary>
-      <div id="bookmarklet-stale-notice" style="display:none;margin:12px 0 0;padding:10px 14px;background:color-mix(in srgb,var(--warn) 12%,transparent);border:1px solid color-mix(in srgb,var(--warn) 35%,transparent);border-radius:var(--radius);font-size:0.82rem;color:var(--warn)">
-        ⚠ Your saved bookmarklet is outdated — <strong>drag the button below again</strong> to update it.
-      </div>
-      <p class="bookmarklet-desc">Drag to your bookmarks bar, then click on any YouTube page to send videos to yt-queue. Works on playlists, channels, and single video pages.</p>
+      <p class="bookmarklet-desc">Drag this to your bookmarks bar, then click it on any YouTube playlist page to send all videos to yt-queue.</p>
       <div class="bookmarklet-row">
-        <a id="bookmarklet-link" href="#" class="bookmarklet-drag" title="Drag to bookmarks bar" ondragend="onBookmarkletDragged()">⭐ yt-queue</a>
+        <a id="bookmarklet-link" href="#" class="bookmarklet-drag" title="Drag to bookmarks bar">⭐ yt-queue Playlist</a>
         <a id="bookmarklet-test-link" href="#" class="bookmarklet-drag bookmarklet-test" title="Drag to bookmarks bar — dry run only">🔍 yt-queue Preview</a>
         <span class="bookmarklet-hint">← drag both to bookmarks bar</span>
       </div>

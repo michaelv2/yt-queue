@@ -17,26 +17,12 @@ from .models import Job, JobStatus
 log = logging.getLogger(__name__)
 
 
-class _Cancelled(Exception):
-    pass
-
-
 class JobStore:
     """Thread/async-safe in-memory job store with video_id-per-batch deduplication."""
 
     def __init__(self):
         self._jobs: dict[str, Job] = {}
         self._lock = asyncio.Lock()
-        self._cancel_flags: set[str] = set()
-
-    def request_cancel(self, job_id: str) -> None:
-        self._cancel_flags.add(job_id)
-
-    def is_cancel_requested(self, job_id: str) -> bool:
-        return job_id in self._cancel_flags
-
-    def clear_cancel(self, job_id: str) -> None:
-        self._cancel_flags.discard(job_id)
 
     async def get(self, job_id: str) -> Job | None:
         return self._jobs.get(job_id)
@@ -55,7 +41,7 @@ class JobStore:
         expired = [
             jid
             for jid, j in self._jobs.items()
-            if j.status in (JobStatus.completed, JobStatus.cancelled)
+            if j.status == JobStatus.completed
             and (now - j.created_at) > settings.job_ttl_seconds
         ]
         for jid in expired:
@@ -114,21 +100,13 @@ class JobRunner:
         device = await self._device_pool.get()
         tmp_dir = Path(tempfile.mkdtemp(prefix="ytqueue_", dir=settings.temp_dir))
         try:
-            if self.store.is_cancel_requested(job.id):
-                raise _Cancelled()
             await self._pipeline(job, tmp_dir, filter_criteria, device=device)
-        except _Cancelled:
-            log.info("Job %s cancelled", job.id)
-            job.status = JobStatus.cancelled
-            job.error = None
-            await self.store.update(job)
         except Exception as exc:
             log.exception("Job %s failed: %s", job.id, exc)
             job.status = JobStatus.failed
             job.error = str(exc)
             await self.store.update(job)
         finally:
-            self.store.clear_cancel(job.id)
             shutil.rmtree(tmp_dir, ignore_errors=True)
             self._device_pool.put_nowait(device)
 
@@ -150,12 +128,7 @@ class JobRunner:
         audio_dir.mkdir(parents=True, exist_ok=True)
         ogg_file = audio_dir / f"{job.video_id}.ogg"
 
-        def _check_cancel():
-            if self.store.is_cancel_requested(job.id):
-                raise _Cancelled()
-
         # Phase 1: Download — skip if a cached OGG already exists
-        _check_cancel()
         if ogg_file.exists():
             log.info("Job %s: cached audio found at %s, skipping download", job.id, ogg_file)
             if not job.title or not job.duration:
@@ -185,40 +158,33 @@ class JobRunner:
             await self.store.update(job)
 
             # Encode WAV → OGG immediately so audio survives a transcription failure
-            ffmpeg_bin = _find_ffmpeg()
-            if not ffmpeg_bin:
-                log.warning("Job %s: ffmpeg not found, using WAV for transcription", job.id)
+            try:
+                ffmpeg_bin = _find_ffmpeg() or "ffmpeg"
+                await loop.run_in_executor(
+                    None,
+                    lambda: subprocess.run(
+                        [ffmpeg_bin, "-y", "-i", str(wav_path),
+                         "-c:a", "libopus", "-b:a", "96k", str(ogg_file)],
+                        check=True, capture_output=True,
+                    ),
+                )
+                log.info("Job %s: audio pre-cached → %s", job.id, ogg_file)
+                transcribe_path = ogg_file
+            except Exception:
+                log.warning("Job %s: OGG pre-cache failed, falling back to WAV", job.id, exc_info=True)
                 transcribe_path = wav_path
-            else:
-                try:
-                    await loop.run_in_executor(
-                        None,
-                        lambda: subprocess.run(
-                            [ffmpeg_bin, "-y", "-i", str(wav_path),
-                             "-c:a", "libopus", "-b:a", "96k", str(ogg_file)],
-                            check=True, capture_output=True,
-                        ),
-                    )
-                    log.info("Job %s: audio pre-cached → %s", job.id, ogg_file)
-                    transcribe_path = ogg_file
-                except Exception:
-                    log.warning("Job %s: OGG encoding failed, falling back to WAV", job.id, exc_info=True)
-                    transcribe_path = wav_path
 
             job.progress = 0.35
             await self.store.update(job)
 
         # Phase 2: Transcribe
-        _check_cancel()
         job.status = JobStatus.transcribing
         job.progress = 0.4
         await self.store.update(job)
-        _check_cancel()
 
         segments = await loop.run_in_executor(
             None, transcriber.transcribe, transcribe_path, device
         )
-        _check_cancel()
         job.segments = segments
         job.progress = 0.7
         await self.store.update(job)
@@ -226,7 +192,6 @@ class JobRunner:
         full_text = " ".join(s.text for s in segments)
 
         # Phase 3: Summarize (non-fatal)
-        _check_cancel()
         job.status = JobStatus.summarizing
         job.progress = 0.75
         await self.store.update(job)
