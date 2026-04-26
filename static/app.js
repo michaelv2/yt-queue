@@ -188,14 +188,36 @@ document.getElementById('hide-empty-batches').addEventListener('change', renderH
 loadHistory();
 loadBookmarklet();
 
+const BM_VERSION_KEY = 'ytqueue_bm_version';
+
 async function loadBookmarklet() {
   try {
-    const [prod, test] = await Promise.all([
+    const [prod, test, verResp] = await Promise.all([
       fetch('/bookmarklet.js'),
       fetch('/bookmarklet-test.js'),
+      fetch('/api/bookmarklet-version'),
     ]);
+
+    let currentVersion = null;
+    if (verResp.ok) {
+      const vd = await verResp.json();
+      currentVersion = vd.version;
+    }
+
     if (prod.ok) {
-      document.getElementById('bookmarklet-link').href = 'javascript:' + await prod.text();
+      const code = await prod.text();
+      document.getElementById('bookmarklet-link').href = 'javascript:' + code;
+
+      // Detect version embedded in the served code
+      const vm = code.match(/var VERSION\s*=\s*'([^']+)'/);
+      const servedVersion = vm ? vm[1] : null;
+
+      const savedVersion = localStorage.getItem(BM_VERSION_KEY);
+      const staleNotice  = document.getElementById('bookmarklet-stale-notice');
+
+      if (staleNotice && servedVersion && savedVersion && savedVersion !== servedVersion) {
+        staleNotice.style.display = 'block';
+      }
     }
     if (test.ok) {
       document.getElementById('bookmarklet-test-link').href = 'javascript:' + await test.text();
@@ -203,6 +225,17 @@ async function loadBookmarklet() {
   } catch (e) {
     console.warn('Bookmarklet load error:', e);
   }
+}
+
+// Called by the drag-end handler on the bookmarklet link
+function onBookmarkletDragged() {
+  try {
+    const code = document.getElementById('bookmarklet-link').href.replace('javascript:', '');
+    const vm   = code.match(/var VERSION\s*=\s*'([^']+)'/);
+    if (vm) localStorage.setItem(BM_VERSION_KEY, vm[1]);
+    const n = document.getElementById('bookmarklet-stale-notice');
+    if (n) n.style.display = 'none';
+  } catch (e) {}
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

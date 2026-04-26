@@ -10,14 +10,17 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from starlette.middleware.sessions import SessionMiddleware
+from fastapi.responses import FileResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import settings
 from .database import ArchiveDB
 from .jobs import BatchStore, JobRunner, JobStore, cleanup_loop
+from .auth import verify_password
 from pydantic import BaseModel
 
 from .models import (
@@ -128,12 +131,80 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="yt-queue", lifespan=lifespan)
 
+# Session middleware must be added last (executed first in chain)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://www.youtube.com", "https://youtu.be", "https://vimeo.com"],
     allow_methods=["POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
 )
+
+if settings.auth_enabled:
+    app.add_middleware(SessionMiddleware, secret_key=settings.base_url.replace("/", "")[:32])
+
+
+def _bearer_token_valid(request: Request) -> bool:
+    """Return True if the request carries a valid API token."""
+    if not settings.api_token:
+        return False
+    auth = request.headers.get("Authorization", "")
+    return auth == f"Bearer {settings.api_token}"
+
+
+# Auth check middleware
+if settings.auth_enabled:
+    class AuthCheckMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            path = request.url.path
+
+            # Public routes (no auth needed)
+            if path in ("/login", "/logout", "/api/health") or path.startswith("/bookmarklet"):
+                return await call_next(request)
+
+            # Accept valid bearer token (used by bookmarklet from cross-origin)
+            if _bearer_token_valid(request):
+                return await call_next(request)
+
+            is_authenticated = request.session.get("authenticated", False)
+
+            # Redirect unauthenticated GET requests to login
+            if not is_authenticated and request.method == "GET" and not path.startswith("/api/"):
+                return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
+
+            # Return 401 for unauthenticated API requests
+            if not is_authenticated and path.startswith("/api/"):
+                return Response(status_code=status.HTTP_401_UNAUTHORIZED)
+
+            return await call_next(request)
+
+    app.add_middleware(AuthCheckMiddleware)
+
+
+# ── Authentication routes ─────────────────────────────────────────────────────
+
+
+class LoginRequest(BaseModel):
+    password: str
+
+
+@app.post("/login")
+async def login(req: LoginRequest, request: Request):
+    """Authenticate and create session."""
+    if not settings.auth_enabled:
+        raise HTTPException(status_code=403, detail="Authentication not enabled")
+
+    if verify_password(req.password, settings.password_hash):
+        request.session["authenticated"] = True
+        return {"status": "authenticated"}
+
+    raise HTTPException(status_code=401, detail="Invalid password")
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    """Clear session and redirect to login."""
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=status.HTTP_302_FOUND)
 
 
 # ── Batch routes ──────────────────────────────────────────────────────────────
@@ -223,7 +294,7 @@ async def get_batch_status(batch_id: str) -> BatchStatus:
             ))
 
     total = len(batch["job_ids"])
-    in_progress = sum(1 for j in jobs if j.status not in (JobStatus.completed, JobStatus.failed))
+    in_progress = sum(1 for j in jobs if j.status not in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled))
     # Use the DB as source of truth for completed — covers jobs evicted from the in-memory store
     completed = await archive_db.count_batch(batch_id)
     failed = max(0, total - completed - in_progress)
@@ -251,6 +322,17 @@ async def get_batch_status(batch_id: str) -> BatchStatus:
 
 
 # ── Job retry ─────────────────────────────────────────────────────────────────
+
+
+@app.post("/api/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    job = await store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in (JobStatus.completed, JobStatus.failed, JobStatus.cancelled):
+        raise HTTPException(status_code=409, detail=f"Job already {job.status}")
+    store.request_cancel(job_id)
+    return {"job_id": job_id, "status": "cancel_requested"}
 
 
 @app.post("/api/jobs/{job_id}/retry")
@@ -582,6 +664,207 @@ async def health():
     return {"status": "ok", "llm_provider": settings.llm_provider}
 
 
+# ── Settings ──────────────────────────────────────────────────────────────────
+
+ENV_FILE = PROJECT_DIR / ".env"
+
+
+class SettingsPatch(BaseModel):
+    whisper_model: str | None = None
+    whisper_device: str | None = None
+    whisper_compute_type: str | None = None
+    max_concurrent_jobs: int | None = None
+    max_duration_seconds: int | None = None
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    llm_api_key: str | None = None
+    llm_base_url: str | None = None
+    summary_max_words: int | None = None
+    base_url: str | None = None
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+
+def _load_env_file() -> dict:
+    env = {}
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                env[k.strip()] = v.strip()
+    return env
+
+
+def _save_env_file(env: dict):
+    lines = [f"{k}={v}" for k, v in env.items()]
+    ENV_FILE.write_text("\n".join(lines) + "\n")
+
+
+@app.get("/api/settings")
+async def get_settings():
+    """Return current (non-sensitive) settings."""
+    api_key = settings.llm_api_key
+    masked_key = f"{'*' * 8}{api_key[-4:]}" if len(api_key) > 4 else ("set" if api_key else "")
+    token = settings.api_token
+    masked_token = f"{'*' * 8}{token[-4:]}" if len(token) > 4 else ("set" if token else "")
+    return {
+        "base_url": settings.base_url,
+        "whisper_model": settings.whisper_model,
+        "whisper_device": settings.whisper_device,
+        "whisper_compute_type": settings.whisper_compute_type,
+        "max_concurrent_jobs": settings.max_concurrent_jobs,
+        "max_duration_seconds": settings.max_duration_seconds,
+        "llm_provider": settings.llm_provider,
+        "llm_model": settings.llm_model,
+        "llm_api_key_masked": masked_key,
+        "llm_base_url": settings.llm_base_url,
+        "summary_max_words": settings.summary_max_words,
+        "auth_enabled": settings.auth_enabled,
+        "api_token_masked": masked_token,
+        "env_file_exists": ENV_FILE.exists(),
+    }
+
+
+@app.patch("/api/settings")
+async def patch_settings(patch: SettingsPatch):
+    """Apply settings immediately and persist to .env."""
+    global llm, runner
+
+    env = _load_env_file()
+    mapping: dict[str, str | None] = {
+        "YTQUEUE_WHISPER_MODEL":        patch.whisper_model,
+        "YTQUEUE_WHISPER_DEVICE":       patch.whisper_device,
+        "YTQUEUE_WHISPER_COMPUTE_TYPE": patch.whisper_compute_type,
+        "YTQUEUE_MAX_CONCURRENT_JOBS":  None if patch.max_concurrent_jobs is None else str(patch.max_concurrent_jobs),
+        "YTQUEUE_MAX_DURATION_SECONDS": None if patch.max_duration_seconds is None else str(patch.max_duration_seconds),
+        "YTQUEUE_LLM_PROVIDER":         patch.llm_provider,
+        "YTQUEUE_LLM_MODEL":            patch.llm_model,
+        "YTQUEUE_LLM_API_KEY":          patch.llm_api_key,
+        "YTQUEUE_LLM_BASE_URL":         patch.llm_base_url,
+        "YTQUEUE_SUMMARY_MAX_WORDS":    None if patch.summary_max_words is None else str(patch.summary_max_words),
+        "YTQUEUE_BASE_URL":             patch.base_url,
+    }
+    changed = []
+    for key, val in mapping.items():
+        if val is not None:
+            env[key] = val
+            changed.append(key)
+    _save_env_file(env)
+
+    # ── Apply to live settings object ──────────────────────────────────────────
+    llm_dirty = False
+    whisper_dirty = False
+
+    if patch.whisper_model is not None:
+        settings.whisper_model = patch.whisper_model
+        whisper_dirty = True
+    if patch.whisper_device is not None:
+        settings.whisper_device = patch.whisper_device
+        whisper_dirty = True
+    if patch.whisper_compute_type is not None:
+        settings.whisper_compute_type = patch.whisper_compute_type
+        whisper_dirty = True
+    if patch.max_concurrent_jobs is not None:
+        settings.max_concurrent_jobs = patch.max_concurrent_jobs
+    if patch.max_duration_seconds is not None:
+        settings.max_duration_seconds = patch.max_duration_seconds
+    if patch.llm_provider is not None:
+        settings.llm_provider = patch.llm_provider
+        llm_dirty = True
+    if patch.llm_model is not None:
+        settings.llm_model = patch.llm_model
+        llm_dirty = True
+    if patch.llm_api_key is not None:
+        settings.llm_api_key = patch.llm_api_key
+        llm_dirty = True
+    if patch.llm_base_url is not None:
+        settings.llm_base_url = patch.llm_base_url
+        llm_dirty = True
+    if patch.summary_max_words is not None:
+        settings.summary_max_words = patch.summary_max_words
+    if patch.base_url is not None:
+        settings.base_url = patch.base_url
+
+    if whisper_dirty:
+        from .transcriber import _models as _whisper_cache
+        _whisper_cache.clear()
+        log.info("Whisper model cache cleared (new: %s / %s)", settings.whisper_model, settings.whisper_device)
+
+    if llm_dirty:
+        llm = get_llm(settings)
+        runner.llm = llm
+        log.info("LLM rebuilt: provider=%s model=%s", settings.llm_provider, settings.llm_model)
+
+    return {"saved": changed, "restart_required": False}
+
+
+class AuthToggle(BaseModel):
+    enable: bool
+    password: str = ""   # required when enable=True
+
+
+@app.post("/api/settings/auth")
+async def toggle_auth(req: AuthToggle):
+    """Enable or disable authentication. Applies immediately and writes to .env."""
+    env = _load_env_file()
+
+    if req.enable:
+        if not req.password:
+            raise HTTPException(status_code=400, detail="Password required to enable authentication")
+        try:
+            import bcrypt
+            salt = bcrypt.gensalt()
+            pw_hash = bcrypt.hashpw(req.password.encode(), salt).decode()
+        except ImportError:
+            raise HTTPException(status_code=500, detail="bcrypt not installed")
+
+        env["YTQUEUE_AUTH_ENABLED"] = "true"
+        env["YTQUEUE_PASSWORD_HASH"] = pw_hash
+        settings.auth_enabled = True
+        settings.password_hash = pw_hash
+        _save_env_file(env)
+        return {"auth_enabled": True}
+    else:
+        env["YTQUEUE_AUTH_ENABLED"] = "false"
+        env.pop("YTQUEUE_PASSWORD_HASH", None)
+        settings.auth_enabled = False
+        settings.password_hash = ""
+        _save_env_file(env)
+        return {"auth_enabled": False}
+
+
+@app.post("/api/settings/password")
+async def change_password(req: PasswordChange, request: Request):
+    """Change the app password. Takes effect immediately."""
+    if not settings.auth_enabled:
+        raise HTTPException(status_code=400, detail="Authentication is not enabled")
+    if not verify_password(req.current_password, settings.password_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if not req.new_password:
+        raise HTTPException(status_code=400, detail="New password cannot be empty")
+
+    try:
+        import bcrypt
+        salt = bcrypt.gensalt()
+        new_hash = bcrypt.hashpw(req.new_password.encode(), salt).decode()
+    except ImportError:
+        raise HTTPException(status_code=500, detail="bcrypt not installed")
+
+    # Apply immediately to running settings
+    settings.password_hash = new_hash
+
+    # Persist to .env
+    env = _load_env_file()
+    env["YTQUEUE_PASSWORD_HASH"] = new_hash
+    _save_env_file(env)
+
+    return {"status": "password updated"}
+
+
 # ── Batch preview (dry run) ────────────────────────────────────────────────────
 
 _previews: dict[str, dict] = {}
@@ -623,18 +906,35 @@ _SOURCE_JS = PROJECT_DIR / "source.js"
 _SOURCE_TEST_JS = PROJECT_DIR / "source-test.js"
 
 
+def _build_bookmarklet(src: str) -> str:
+    """Substitute server-side placeholders and embed a content hash as VERSION."""
+    import hashlib
+    version = hashlib.sha1(src.encode()).hexdigest()[:8]
+    return (src
+            .replace("__SERVER__", settings.base_url.rstrip("/"))
+            .replace("__API_TOKEN__", settings.api_token)
+            .replace("__VERSION__", version))
+
+
 @app.get("/bookmarklet.js")
 async def serve_bookmarklet():
-    src = _SOURCE_JS.read_text()
-    js = src.replace("__SERVER__", settings.base_url.rstrip("/"))
+    js = _build_bookmarklet(_SOURCE_JS.read_text())
     return Response(content=js, media_type="application/javascript")
 
 
 @app.get("/bookmarklet-test.js")
 async def serve_bookmarklet_test():
-    src = _SOURCE_TEST_JS.read_text()
-    js = src.replace("__SERVER__", settings.base_url.rstrip("/"))
+    js = _build_bookmarklet(_SOURCE_TEST_JS.read_text())
     return Response(content=js, media_type="application/javascript")
+
+
+@app.get("/api/bookmarklet-version")
+async def bookmarklet_version():
+    """Returns current bookmarklet version hash so the UI can detect stale installs."""
+    import hashlib
+    src = _SOURCE_JS.read_text()
+    version = hashlib.sha1(src.encode()).hexdigest()[:8]
+    return {"version": version}
 
 
 # ── Static files (must be last) ───────────────────────────────────────────────

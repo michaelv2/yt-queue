@@ -37,6 +37,8 @@ All settings use the `YTQUEUE_` prefix (see `app/config.py`):
 | `YTQUEUE_LLM_API_KEY` | `""` | API key for anthropic/openai |
 | `YTQUEUE_LLM_BASE_URL` | `""` | Custom base URL (Ollama: `http://localhost:11434`) |
 | `YTQUEUE_SUMMARY_MAX_WORDS` | `80` | Word budget for LLM summaries |
+| `YTQUEUE_AUTH_ENABLED` | `false` | Enable password protection |
+| `YTQUEUE_PASSWORD_HASH` | `""` | bcrypt hash (use `setup_auth.py` to generate) |
 
 ## Architecture
 
@@ -95,6 +97,40 @@ FTS5 index on `(title, full_text, summary)`.
 - `static/index.html` + `app.js` — Batch URL input + criteria + progress polling
 - `static/triage.html` + `triage.js` — Card grid by relevance, flag toggle, filter/sort
 - `static/archive.html` + `archive.js` — Paginated table, bulk delete
+
+## Authentication Setup
+
+yt-queue supports optional password protection with session-based auth:
+
+```bash
+# 1. Install dependencies
+pip install -r requirements.txt
+
+# 2. Generate password hash
+python3 setup_auth.py
+# Interactive: prompts for password
+# Non-interactive: python3 setup_auth.py --password mypassword
+
+# 3. The script prints environment variables to set:
+export YTQUEUE_AUTH_ENABLED=true
+export YTQUEUE_PASSWORD_HASH='$2b$12$...'
+
+# 4. Restart the server
+uvicorn app.main:app --reload
+
+# Features:
+# - Login page at /login (password form)
+# - Session-based auth with secure cookies
+# - All pages redirect unauthenticated users to /login
+# - API routes return 401 for unauthenticated requests
+# - Logout endpoint clears session at /logout
+```
+
+Or save to `.env`:
+```
+YTQUEUE_AUTH_ENABLED=true
+YTQUEUE_PASSWORD_HASH=<hash-from-setup-auth.py>
+```
 
 ## LLM Setup Examples
 

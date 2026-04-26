@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     llm_api_key: str = ""
     llm_base_url: str = ""              # For Ollama or custom endpoints
     summary_max_words: int = 80
+    # Auth
+    auth_enabled: bool = False
+    password_hash: str = ""              # bcrypt hash; set via setup script
+    api_token: str = ""                  # static bearer token for bookmarklet / API clients
 
     model_config = SettingsConfigDict(env_prefix="YTQUEUE_")
 
