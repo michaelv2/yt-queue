@@ -1,4 +1,4 @@
-# yt-queue
+# YT-Queue
 
 Self-hosted YouTube (and Vimeo) video triage system. Submit a playlist or any page via bookmarklet, transcribe every video locally with Whisper, summarize and score them with an LLM, then triage — keep, flag, or delete — from a clean interface.
 
