@@ -17,6 +17,8 @@ YouTube's own tools are terrible for bulk playlist management. yt-queue lets you
 - **Settings UI** — change Whisper model, LLM provider, and auth settings live from the browser — no restart needed for most changes
 - **Password protection** — optional session-based auth; enable/disable and change password from the Settings page or via `setup.sh`
 - **Multi-GPU** — configurable device pool distributes concurrent jobs across GPUs
+- **Job cancellation** — cancel in-progress transcriptions from the progress page
+- **Light/dark theme** — theme toggle in Settings; preference saved locally
 
 <img width="1900" height="1774" alt="Screenshot 2026-02-27 140023" src="https://github.com/user-attachments/assets/75275bc4-d73c-4c85-8d29-a83374c3679d" />
 
@@ -25,9 +27,17 @@ YouTube's own tools are terrible for bulk playlist management. yt-queue lets you
 ## Requirements
 
 - Python 3.11+
-- `ffmpeg` (system package — `brew install ffmpeg` / `apt install ffmpeg`)
-- A machine with enough RAM for the Whisper model you choose (CPU works; CUDA or MPS recommended)
+- `ffmpeg` (system package — `brew install ffmpeg` / `apt install ffmpeg`, or included via `imageio-ffmpeg`)
+- A machine with enough RAM for the Whisper model you choose (CPU works; CUDA recommended)
 - Optional: an LLM endpoint ([Ollama](https://ollama.com), OpenAI, or Anthropic) for summaries and scoring
+
+### GPU Support
+
+| Platform | Status | Notes |
+|---|---|---|
+| **NVIDIA (CUDA)** | ✅ Supported | Set device to `cuda` in Settings |
+| **Apple Silicon (Metal)** | 🔄 Preview | Set device to `mps`; requires CTranslate2 5.0+ with MPS support (not yet released) |
+| **Intel Arc** | ❌ Not tested | May work via CUDA or OpenCL |
 
 ---
 
