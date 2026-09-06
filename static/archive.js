@@ -313,7 +313,6 @@ document.getElementById('score-btn').addEventListener('click', async () => {
       const detail = data.detail;
       throw new Error(Array.isArray(detail) ? detail.map(e => e.msg).join(', ') : (detail || 'Failed to start'));
     }
-    localStorage.setItem('ytqueue_score_criteria', criteria);
     pollScoreStatus();
   } catch (e) {
     status.textContent = 'Error: ' + e.message;
@@ -334,7 +333,7 @@ function pollScoreStatus() {
         const status = document.getElementById('score-status');
         status.textContent = 'Done';
         setTimeout(() => status.classList.add('hidden'), 3000);
-        updateScoreCriteriaLabel(localStorage.getItem('ytqueue_score_criteria') || '');
+        fetchScoreCriteria();
         loadArchive(_offset);
       }
     } catch (e) {
@@ -344,7 +343,7 @@ function pollScoreStatus() {
 }
 
 initSortHeaders();
-restoreScoreCriteria();
+fetchScoreCriteria();
 loadArchive();
 loadCategories();
 
@@ -359,17 +358,27 @@ document.getElementById('search-input').addEventListener('input', (e) => {
   }, 300);
 });
 
-function restoreScoreCriteria() {
-  const saved = localStorage.getItem('ytqueue_score_criteria');
-  if (saved) {
-    document.getElementById('score-criteria').value = saved;
-    updateScoreCriteriaLabel(saved);
+async function fetchScoreCriteria() {
+  try {
+    const resp = await fetch('/api/archive/score/criteria');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.label) {
+      updateScoreCriteriaLabel(data.label);
+    }
+  } catch (e) {
+    console.warn('Failed to load score criteria:', e);
   }
 }
 
-function updateScoreCriteriaLabel(criteria) {
+function updateScoreCriteriaLabel(label) {
   const el = document.getElementById('score-criteria-label');
-  if (el) el.textContent = criteria ? `"${criteria}"` : '';
+  if (el) el.textContent = label ? `”${label}”` : '';
+  const indicator = document.getElementById('score-criteria-indicator');
+  if (indicator) {
+    indicator.textContent = label ? `Scored against: ${label}` : '';
+    indicator.hidden = !label;
+  }
 }
 
 // ── Categories ────────────────────────────────────────────────────────────────

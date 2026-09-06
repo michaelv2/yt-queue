@@ -452,13 +452,16 @@ async def get_archive_audio(row_id: int):
 class ArchiveScoreRequest(BaseModel):
     criteria: str
     ids: list[int] = []  # empty = score everything
+    label: str = ""
 
 
 _score_running: set[str] = set()
 
 
-async def _run_score_archive(key: str, ids: list[int], criteria: str) -> None:
+async def _run_score_archive(key: str, ids: list[int], criteria: str, label: str = "") -> None:
     loop = asyncio.get_running_loop()
+    await archive_db.set_setting("score_criteria", criteria)
+    await archive_db.set_setting("score_criteria_label", label or criteria)
     try:
         rows = await archive_db.get_summaries_by_ids(ids) if ids else await archive_db.get_all_summaries()
         log.info("Scoring %d transcripts against criteria: %s", len(rows), criteria)
@@ -489,13 +492,19 @@ async def score_archive(req: ArchiveScoreRequest):
     if key in _score_running:
         return {"status": "already_running", "count": len(req.ids)}
     _score_running.add(key)
-    asyncio.create_task(_run_score_archive(key, req.ids, req.criteria))
+    asyncio.create_task(_run_score_archive(key, req.ids, req.criteria, req.label))
     return {"status": "started", "count": len(req.ids), "key": key}
 
 
 @app.get("/api/archive/score/status")
 async def score_archive_status():
     return {"running": len(_score_running) > 0}
+
+
+@app.get("/api/archive/score/criteria")
+async def get_score_criteria():
+    label = await archive_db.get_setting("score_criteria_label")
+    return {"label": label or ""}
 
 
 @app.post("/api/archive/delete")

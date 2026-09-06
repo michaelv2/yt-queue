@@ -176,9 +176,13 @@ def main():
         return
 
     # Call scoring endpoint
+    has_goals = goals_text is not None
+    label = f"Project recommendations ({len(project_summaries)} projects"
+    label += " + goals)" if has_goals else ")"
+
     url = f"{args.server.rstrip('/')}/api/archive/score"
     try:
-        resp = requests.post(url, json={"criteria": criteria}, timeout=10)
+        resp = requests.post(url, json={"criteria": criteria, "label": label}, timeout=10)
         resp.raise_for_status()
     except requests.RequestException as e:
         print(f"Error calling {url}: {e}")

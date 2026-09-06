@@ -115,6 +115,12 @@ class ArchiveDB:
                 log.info("Added column %s to transcripts", col)
             except Exception:
                 pass  # column already exists
+        await self._db.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.commit()
         log.info("Archive DB ready: %s", self._db_path)
@@ -122,6 +128,21 @@ class ArchiveDB:
     async def close(self) -> None:
         if self._db:
             await self._db.close()
+
+    # ── Settings ──────────────────────────────────────────────────────────────
+
+    async def get_setting(self, key: str) -> str | None:
+        row = await self._db.execute_fetchall(
+            "SELECT value FROM settings WHERE key = ?", (key,)
+        )
+        return row[0][0] if row else None
+
+    async def set_setting(self, key: str, value: str) -> None:
+        await self._db.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?",
+            (key, value, value),
+        )
+        await self._db.commit()
 
     # ── Batch methods ─────────────────────────────────────────────────────────
 

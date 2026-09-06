@@ -146,6 +146,21 @@ function fmtDuration(secs) {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
+async function fetchScoreCriteria() {
+  const indicator = document.getElementById('score-criteria-indicator');
+  if (!indicator) return;
+  try {
+    const resp = await fetch('/api/archive/score/criteria');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    indicator.textContent = data.label ? `Scored against: ${data.label}` : '';
+    indicator.hidden = !data.label;
+  } catch (e) {
+    console.warn('Failed to load score criteria:', e);
+  }
+}
+
 loadBatches();
 loadCategories();
 loadPreviews();
+fetchScoreCriteria();
