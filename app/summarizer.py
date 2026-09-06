@@ -115,7 +115,8 @@ class AnthropicLLM(BaseLLM):
         sample = "\n\n".join(f"- {s}" for s in summaries[:150])
         prompt = (
             f"Here are summaries of YouTube videos in a personal library.\n\n{sample}\n\n"
-            f"Derive exactly {n} category names covering all content types present. "
+            f"Derive between 6 and {n} category names covering all content types present. "
+            "Categories must be clearly distinct with minimal overlap — prefer broader, well-separated themes over narrow, similar ones. "
             f'Return only a JSON array: [{{"name": "...", "description": "one sentence"}}, ...]. No other text.'
         )
         try:
@@ -221,7 +222,8 @@ class OpenAILLM(BaseLLM):
         sample = "\n\n".join(f"- {s}" for s in summaries[:150])
         prompt = (
             f"Here are summaries of YouTube videos in a personal library.\n\n{sample}\n\n"
-            f"Derive exactly {n} category names covering all content types present. "
+            f"Derive between 6 and {n} category names covering all content types present. "
+            "Categories must be clearly distinct with minimal overlap — prefer broader, well-separated themes over narrow, similar ones. "
             f'Return only a JSON array: [{{"name": "...", "description": "one sentence"}}, ...]. No other text.'
         )
         try:
@@ -350,7 +352,8 @@ class OllamaLLM(BaseLLM):
         sample = "\n\n".join(f"- {s}" for s in summaries[:150])
         user = (
             f"Here are summaries of YouTube videos in a personal library.\n\n{sample}\n\n"
-            f"Derive exactly {n} category names covering all content types present. "
+            f"Derive between 6 and {n} category names covering all content types present. "
+            "Categories must be clearly distinct with minimal overlap — prefer broader, well-separated themes over narrow, similar ones. "
             f'Return only a JSON array: [{{"name": "...", "description": "one sentence"}}, ...]. No other text.'
         )
         try:

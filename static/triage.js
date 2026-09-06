@@ -101,6 +101,8 @@ function getFilteredSorted() {
       const sb = b.relevance_score ?? -1;
       return sb - sa;
     });
+  } else if (sortVal === 'date') {
+    items.sort((a, b) => (b.archived_at || 0) - (a.archived_at || 0));
   } else {
     items.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
   }
@@ -479,7 +481,15 @@ function showModal(data) {
           ${duration ? duration + ' · ' : ''}${wordCount.toLocaleString()} words
         </div>
         ${takeawaysBlock}
-        ${data.has_audio ? `<audio id="modal-audio-player" controls src="/api/archive/${data.id}/audio" style="width:100%;margin-bottom:12px;"></audio>` : ''}
+        ${data.audio_url ? `<div class="modal-audio-wrap">
+          <audio id="modal-audio-player" controls src="${data.audio_url}"></audio>
+          <div class="playback-speed" id="playback-speed">
+            <button class="speed-btn active" data-speed="1">1x</button>
+            <button class="speed-btn" data-speed="1.25">1.25x</button>
+            <button class="speed-btn" data-speed="1.5">1.5x</button>
+            <button class="speed-btn" data-speed="2">2x</button>
+          </div>
+        </div>` : ''}
         <div class="transcript-body" id="transcript-body"></div>
       </div>
     </div>
@@ -490,6 +500,16 @@ function showModal(data) {
   const segments = data.segments || [];
   const fullText = data.full_text || '';
   const audioEl = document.getElementById('modal-audio-player');
+  const speedWrap = document.getElementById('playback-speed');
+  if (speedWrap && audioEl) {
+    speedWrap.addEventListener('click', (e) => {
+      const btn = e.target.closest('.speed-btn');
+      if (!btn) return;
+      audioEl.playbackRate = parseFloat(btn.dataset.speed);
+      speedWrap.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  }
 
   function renderModalBody() {
     const body = document.getElementById('transcript-body');

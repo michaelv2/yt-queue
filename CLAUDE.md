@@ -8,9 +8,11 @@ yt-queue is a sibling app to DePuzzle. It accepts a batch of YouTube URLs, runs 
 
 ## Running the Server
 
+**Prerequisites:** Node.js (used by yt-dlp for YouTube signature decryption). NVM-managed installs are auto-detected.
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+.venv/bin/python3 -m pip install -r requirements.txt  # always use venv pip, not bare pip
 
 # Development
 uvicorn app.main:app --reload
@@ -18,6 +20,8 @@ uvicorn app.main:app --reload
 # Production
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+
+> **Pip + pyenv pitfall:** With pyenv active, bare `pip install` may install into pyenv's global Python instead of the venv. Always use `.venv/bin/python3 -m pip install` to be safe.
 
 ## Environment Configuration
 
@@ -41,7 +45,7 @@ All settings use the `YTQUEUE_` prefix (see `app/config.py`):
 ## Architecture
 
 ### Pipeline (per video)
-1. **Download** — yt-dlp, WAV via ffmpeg
+1. **Download** — yt-dlp (subprocess CLI), WAV via ffmpeg. Requires Node.js for YouTube JS challenge solving.
 2. **Transcribe** — faster-whisper with VAD
 3. **Summarize** — LLM.summarize(full_text); non-fatal, empty string on failure
 4. **Score** — LLM.score_relevance(summary, criteria) → 0.0–1.0; only if criteria provided
@@ -55,7 +59,7 @@ All settings use the `YTQUEUE_` prefix (see `app/config.py`):
 - **`app/summarizer.py`** — LLM abstraction: NullLLM, AnthropicLLM, OpenAILLM, OllamaLLM + `get_llm()` factory
 - **`app/jobs.py`** — JobStore (in-memory) + BatchStore (in-memory) + JobRunner (pipeline)
 - **`app/database.py`** — ArchiveDB: async SQLite, FTS5, `get_triage()`, `set_flagged()`
-- **`app/downloader.py`** — Copied from DePuzzle; yt-dlp wrapper
+- **`app/downloader.py`** — yt-dlp wrapper (subprocess CLI, not Python API — the API has player variant bugs). Auto-discovers Node.js via NVM paths for systemd compatibility.
 - **`app/transcriber.py`** — Copied from DePuzzle; faster-whisper wrapper
 - **`app/main.py`** — FastAPI routes + lifespan
 
@@ -116,3 +120,10 @@ YTQUEUE_LLM_PROVIDER=ollama \
 YTQUEUE_LLM_MODEL=llama3.2 \
 uvicorn app.main:app --reload
 ```
+
+## Ecosystem
+
+yt-queue is part of a broader personal knowledge and research stack:
+
+- **Memoize** (downstream): Transcribed and summarized video content is a natural information funnel into memoize's second-brain knowledge system, feeding structured learnings, ideas, and decisions into the entity graph.
+- **Active projects** (upstream, via `recommend.py`): The `recommend.py` CLI scans `~/projects` and `~/projects_safe` for project directories, extracts descriptions from CLAUDE.md/README.md, combines them with optional goals from `goals.md`, and submits the result as scoring criteria to yt-queue's `/api/archive/score` endpoint. Run on-demand to re-score the archive against current research interests.

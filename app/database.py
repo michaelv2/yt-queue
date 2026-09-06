@@ -288,7 +288,7 @@ class ArchiveDB:
         if batch_id is not None:
             sql = """SELECT id, video_id, title, duration, summary, key_takeaways,
                             relevance_score, is_flagged, is_marked_for_deletion, is_watched,
-                            youtube_url, batch_id, category, thumbnail_url
+                            youtube_url, batch_id, category, thumbnail_url, archived_at
                      FROM transcripts
                      WHERE batch_id = ?
                      ORDER BY relevance_score DESC NULLS LAST, archived_at DESC"""
@@ -296,7 +296,7 @@ class ArchiveDB:
         else:
             sql = """SELECT id, video_id, title, duration, summary, key_takeaways,
                             relevance_score, is_flagged, is_marked_for_deletion, is_watched,
-                            youtube_url, batch_id, category, thumbnail_url
+                            youtube_url, batch_id, category, thumbnail_url, archived_at
                      FROM transcripts
                      ORDER BY relevance_score DESC NULLS LAST, archived_at DESC"""
             params = ()

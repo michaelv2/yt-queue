@@ -5,6 +5,7 @@ let _items = [];
 let _batchFilter = '';
 let _categoryFilter = '';
 let _tagFilter = '';
+let _sortCol = 'archived_at';
 
 async function loadPreviews() {
   // First fetch to get total count
@@ -23,8 +24,8 @@ async function loadPreviews() {
     const params = new URLSearchParams({
       limit: 200,
       offset: off,
-      sort_col: 'archived_at',
-      sort_dir: 'desc',
+      sort_col: _sortCol,
+      sort_dir: _sortCol === 'title' ? 'asc' : 'desc',
     });
     if (_batchFilter) params.set('batch_id', _batchFilter);
     if (_categoryFilter) params.set('category', _categoryFilter);
@@ -62,7 +63,7 @@ function renderGrid(items) {
           ${badges.length ? `<div class="thumb-overlay-badges">${badges.join('')}</div>` : ''}
         </div>
         <div class="thumb-caption">
-          <span class="thumb-title">${esc(item.title)}</span>
+          ${item.batch_id ? `<a href="/triage.html?batch=${esc(item.batch_id)}" class="thumb-title">${esc(item.title)}</a>` : `<span class="thumb-title">${esc(item.title)}</span>`}
           <span class="thumb-meta">${item.duration ? fmtDuration(item.duration) : ''}</span>
         </div>
       </div>`;
@@ -121,6 +122,11 @@ document.getElementById('category-filter').addEventListener('change', (e) => {
 
 document.getElementById('tag-filter').addEventListener('change', (e) => {
   _tagFilter = e.target.value;
+  loadPreviews();
+});
+
+document.getElementById('sort-select').addEventListener('change', (e) => {
+  _sortCol = e.target.value;
   loadPreviews();
 });
 

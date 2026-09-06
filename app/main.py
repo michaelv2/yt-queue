@@ -333,6 +333,7 @@ def _triage_entry(r: dict, prev_deleted: set[str]) -> TriageEntry:
         category=r.get("category"),
         was_previously_deleted=r["video_id"] in prev_deleted,
         thumbnail_url=r.get("thumbnail_url", ""),
+        archived_at=r.get("archived_at"),
     )
 
 
@@ -508,6 +509,16 @@ async def delete_archive(req: ArchiveDeleteRequest) -> ArchiveDeleteResponse:
         except Exception:
             log.warning("Failed to delete audio file: %s", ap)
     return ArchiveDeleteResponse(deleted=deleted)
+
+
+@app.post("/api/archive/check")
+async def check_archived(req: dict):
+    """Return the subset of video_ids that are already in the archive."""
+    video_ids = req.get("video_ids", [])
+    if not video_ids:
+        return {"archived": []}
+    archived = await archive_db.get_archived_by_video_ids(video_ids)
+    return {"archived": sorted(archived)}
 
 
 # ── Category generation ───────────────────────────────────────────────────────

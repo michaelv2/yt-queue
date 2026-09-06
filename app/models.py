@@ -102,6 +102,7 @@ class TriageEntry(BaseModel):
     category: str | None = None
     was_previously_deleted: bool = False
     thumbnail_url: str = ""
+    archived_at: float | None = None
 
 
 # ── Archive models ────────────────────────────────────────────────────────────

@@ -83,6 +83,8 @@
       display: block;
       background: var(--surface2);
     }
+    .thumb-item.archived { opacity: 0.4; }
+    .thumb-item.archived img { filter: grayscale(0.8); }
     .thumb-item .thumb-id {
       font-size: 0.7rem;
       font-family: monospace;
@@ -91,6 +93,11 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .thumb-item .archived-badge {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      padding: 0 8px 5px;
     }
   </style>
 </head>
@@ -114,7 +121,7 @@
   <script>
     'use strict';
 
-    function render(videoIds) {
+    function render(videoIds, archivedSet) {
       // Deduplicate
       const seen = new Set();
       const unique = [];
@@ -124,13 +131,20 @@
         seen.add(id);
         unique.push(id);
       }
+      const newIds = unique.filter(id => !archivedSet.has(id));
+      const archivedCount = unique.length - newIds.length;
 
       document.getElementById('preview-content').innerHTML = `
         <div class="preview-stats">
           <div class="stat-box">
-            <div class="stat-value">${unique.length}</div>
-            <div class="stat-label">videos found</div>
+            <div class="stat-value">${newIds.length}</div>
+            <div class="stat-label">new videos</div>
           </div>
+          ${archivedCount > 0 ? `
+          <div class="stat-box warn">
+            <div class="stat-value">${archivedCount}</div>
+            <div class="stat-label">already archived</div>
+          </div>` : ''}
           ${dupes > 0 ? `
           <div class="stat-box warn">
             <div class="stat-value">${dupes}</div>
@@ -144,25 +158,29 @@
             <input type="text" id="criteria-input"
                    placeholder="e.g. Python tutorials about async">
           </div>
-          <button class="submit-batch-btn" id="submit-btn">Submit batch →</button>
+          <button class="submit-batch-btn" id="submit-btn"
+            ${newIds.length === 0 ? 'disabled' : ''}>Submit batch (${newIds.length}) →</button>
           <span class="submit-status hidden" id="submit-status"></span>
         </div>
 
         <div class="thumb-grid">
-          ${unique.map(id => `
-            <div class="thumb-item" title="${esc(id)}">
+          ${unique.map(id => {
+            const isArchived = archivedSet.has(id);
+            return `
+            <div class="thumb-item${isArchived ? ' archived' : ''}" title="${esc(id)}">
               <a href="https://www.youtube.com/watch?v=${esc(id)}"
                  target="_blank" rel="noopener">
                 <img src="https://img.youtube.com/vi/${esc(id)}/mqdefault.jpg"
                      alt="${esc(id)}" loading="lazy">
               </a>
               <div class="thumb-id">${esc(id)}</div>
-            </div>
-          `).join('')}
+              ${isArchived ? '<div class="archived-badge">already archived</div>' : ''}
+            </div>`;
+          }).join('')}
         </div>
       `;
 
-      document.getElementById('submit-btn').addEventListener('click', () => submit(unique));
+      document.getElementById('submit-btn').addEventListener('click', () => submit(newIds));
     }
 
     async function submit(videoIds) {
@@ -201,7 +219,15 @@
     const params = new URLSearchParams(location.search);
     const idsParam = params.get('ids');
     if (idsParam) {
-      render(idsParam.split(',').filter(Boolean));
+      const ids = idsParam.split(',').filter(Boolean);
+      fetch('/api/archive/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_ids: ids }),
+      })
+        .then(r => r.ok ? r.json() : { archived: [] })
+        .then(data => render(ids, new Set(data.archived)))
+        .catch(() => render(ids, new Set()));
     }
 
     function esc(str) {

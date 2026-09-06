@@ -151,7 +151,9 @@ let _batches = [];
 
 async function loadHistory() {
   try {
-    const resp = await fetch('/api/batches?limit=10');
+    const hideEmpty = document.getElementById('hide-empty-batches').checked;
+    const limit = hideEmpty ? 50 : 10;
+    const resp = await fetch(`/api/batches?limit=${limit}`);
     if (!resp.ok) return;
     _batches = await resp.json();
     renderHistory();
@@ -163,7 +165,7 @@ async function loadHistory() {
 function renderHistory() {
   const list = document.getElementById('history-list');
   const hideEmpty = document.getElementById('hide-empty-batches').checked;
-  const batches = hideEmpty ? _batches.filter(b => b.count > 0) : _batches;
+  const batches = hideEmpty ? _batches.filter(b => b.count > 0).slice(0, 10) : _batches;
 
   if (!batches || batches.length === 0) {
     list.innerHTML = '<p class="empty">No batches yet.</p>';
@@ -183,7 +185,7 @@ function renderHistory() {
   `).join('');
 }
 
-document.getElementById('hide-empty-batches').addEventListener('change', renderHistory);
+document.getElementById('hide-empty-batches').addEventListener('change', loadHistory);
 
 loadHistory();
 loadBookmarklet();

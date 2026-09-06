@@ -705,6 +705,24 @@ td:nth-child(2) { word-break: break-word; }
 .modal-takeaways ul { margin-left: 16px; list-style: disc; }
 .modal-takeaways li { margin-bottom: 4px; font-size: 0.85rem; line-height: 1.5; }
 
+/* ── Audio playback speed ────────────────────────────────────────────────── */
+.modal-audio-wrap { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 12px; }
+.modal-audio-wrap audio { flex: 1; min-width: 0; }
+.playback-speed { display: flex; gap: 0.25rem; flex-shrink: 0; }
+.speed-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.45rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.speed-btn:hover { background: var(--border); color: var(--accent); }
+.speed-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
 /* ── Confirm modal ───────────────────────────────────────────────────────── */
 .modal-sm { max-width: 380px; }
 .confirm-msg { margin-bottom: 20px; font-size: 0.9rem; line-height: 1.5; }
@@ -757,10 +775,15 @@ td:nth-child(2) { word-break: break-word; }
   font-size: 0.78rem;
   line-height: 1.3;
   color: var(--text);
+  text-decoration: none;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+.thumb-title:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 .thumb-meta {
   font-size: 0.7rem;
