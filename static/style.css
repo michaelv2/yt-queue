@@ -562,6 +562,7 @@ td:nth-child(2) { word-break: break-word; }
 .audio-badge { color: var(--accent); margin-left: 4px; font-size: 0.75rem; }
 .badge-flag { color: var(--warn); margin-left: 4px; font-size: 0.8rem; }
 .badge-delete { color: var(--danger); margin-left: 4px; font-size: 0.8rem; }
+.badge-prev-deleted { color: var(--warn); margin-left: 4px; font-size: 0.8rem; }
 
 .pagination { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 16px; }
 .page-btn {
@@ -831,6 +832,7 @@ td:nth-child(2) { word-break: break-word; }
 .thumb-overlay-badge.badge-flag { color: var(--warn); }
 .thumb-overlay-badge.badge-delete { color: var(--danger); }
 .thumb-overlay-badge.badge-watched { color: var(--accent); }
+.thumb-overlay-badge.badge-prev-deleted { color: var(--warn); }
 .preview-badge {
   font-size: 0.7rem;
 }

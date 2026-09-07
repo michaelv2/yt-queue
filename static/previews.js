@@ -53,6 +53,7 @@ function renderGrid(items) {
     if (item.is_flagged) badges.push('<span class="thumb-overlay-badge badge-flag" title="Flagged">&#9733;</span>');
     if (item.is_marked_for_deletion) badges.push('<span class="thumb-overlay-badge badge-delete" title="Marked for deletion">&#128465;</span>');
     if (item.is_watched) badges.push('<span class="thumb-overlay-badge badge-watched" title="Watched">&#128065;</span>');
+    if (item.was_previously_deleted) badges.push('<span class="thumb-overlay-badge badge-prev-deleted" title="Previously deleted">&#9888;</span>');
     return `
       <div class="thumb-item" title="${esc(item.title)}">
         <div class="thumb-img-wrap">

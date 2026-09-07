@@ -126,6 +126,7 @@ class ArchiveEntry(BaseModel):
     has_audio: bool = False
     category: str | None = None
     thumbnail_url: str = ""
+    was_previously_deleted: bool = False
 
 
 class ArchiveListResponse(BaseModel):

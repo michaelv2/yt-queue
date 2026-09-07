@@ -265,10 +265,13 @@ class ArchiveDB:
         # NULLs last for columns that can be null
         qualified_col = f"transcripts.{col}"
         order = f"ORDER BY {qualified_col} IS NULL, {qualified_col} {direction}"
-        select = """SELECT transcripts.id, video_id, transcripts.title, duration, youtube_url,
-                      transcripts.summary, key_takeaways, relevance_score, is_flagged,
-                      is_marked_for_deletion, is_watched, batch_id, created_at, archived_at,
-                      audio_path, category, thumbnail_url
+        select = """SELECT transcripts.id, transcripts.video_id, transcripts.title,
+                      transcripts.duration, transcripts.youtube_url,
+                      transcripts.summary, transcripts.key_takeaways,
+                      transcripts.relevance_score, transcripts.is_flagged,
+                      transcripts.is_marked_for_deletion, transcripts.is_watched,
+                      transcripts.batch_id, transcripts.created_at, transcripts.archived_at,
+                      transcripts.audio_path, transcripts.category, transcripts.thumbnail_url
                FROM transcripts"""
         clauses: list[str] = []
         params: list = []
@@ -281,7 +284,9 @@ class ArchiveDB:
         elif category is not None:
             clauses.append("category = ?")
             params.append(category)
-        if tag and tag in self._TAG_CLAUSES:
+        if tag == "previously_deleted":
+            select += " JOIN deleted_urls ON transcripts.video_id = deleted_urls.video_id"
+        elif tag and tag in self._TAG_CLAUSES:
             clauses.append(self._TAG_CLAUSES[tag])
         if batch_id is not None:
             clauses.append("batch_id = ?")
@@ -458,7 +463,9 @@ class ArchiveDB:
         elif category is not None:
             clauses.append("category = ?")
             params.append(category)
-        if tag and tag in self._TAG_CLAUSES:
+        if tag == "previously_deleted":
+            table += " JOIN deleted_urls ON transcripts.video_id = deleted_urls.video_id"
+        elif tag and tag in self._TAG_CLAUSES:
             clauses.append(self._TAG_CLAUSES[tag])
         if batch_id is not None:
             clauses.append("batch_id = ?")

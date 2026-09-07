@@ -397,12 +397,15 @@ async def list_archive(
         search=search,
     )
     total = await archive_db.count(category=category, tag=tag, batch_id=batch_id, search=search)
+    video_ids = [item["video_id"] for item in items]
+    prev_deleted = await archive_db.get_previously_deleted(video_ids) if video_ids else set()
     entries = [
         ArchiveEntry(
             **{k: v for k, v in item.items() if k not in ("audio_path", "key_takeaways", "thumbnail_url")},
             key_takeaways=_parse_takeaways(item.get("key_takeaways")),
             has_audio=bool(item.get("audio_path")),
             thumbnail_url=item.get("thumbnail_url", ""),
+            was_previously_deleted=item["video_id"] in prev_deleted,
         )
         for item in items
     ]

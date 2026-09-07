@@ -50,6 +50,7 @@ function renderTable() {
         ${item.is_flagged ? '<span class="badge-flag" title="Flagged">★</span>' : ''}
         ${item.is_marked_for_deletion ? '<span class="badge-delete" title="Marked for deletion">🗑</span>' : ''}
         ${item.has_audio ? '<span class="audio-badge" title="Audio available">♪</span>' : ''}
+        ${item.was_previously_deleted ? '<span class="badge-prev-deleted" title="Previously deleted">⚠</span>' : ''}
       </td>
       <td>${item.duration ? fmtDuration(item.duration) : '—'}</td>
       <td class="summary-cell">${esc(item.summary || '')}</td>
