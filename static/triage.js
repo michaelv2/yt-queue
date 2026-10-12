@@ -16,6 +16,7 @@ if (isGlobalMode) {
 let _entries = [];
 let _pollTimer = null;
 let _batchDone = false;
+let _searchQuery = '';
 
 // ── Data loading ──────────────────────────────────────────────────────────────
 
@@ -93,6 +94,14 @@ function getFilteredSorted() {
     items = items.filter(e => !e.category);
   } else if (categoryVal) {
     items = items.filter(e => e.category === categoryVal);
+  }
+
+  if (_searchQuery) {
+    const q = _searchQuery.toLowerCase();
+    items = items.filter(e =>
+      (e.title || '').toLowerCase().includes(q) ||
+      (e.summary || '').toLowerCase().includes(q)
+    );
   }
 
   if (sortVal === 'relevance') {
@@ -341,6 +350,15 @@ function pollSummarize() {
 document.getElementById('filter-select').addEventListener('change', render);
 document.getElementById('sort-select').addEventListener('change', render);
 document.getElementById('category-filter').addEventListener('change', render);
+
+let _searchTimer = null;
+document.getElementById('search-input').addEventListener('input', (e) => {
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(() => {
+    _searchQuery = e.target.value.trim();
+    render();
+  }, 300);
+});
 
 async function loadBatches() {
   try {

@@ -11,3 +11,6 @@ data/
 *.db-shm
 .env
 scripts/wireguard/keys/
+
+# Model eval output (evals/eval_models.py)
+evals/results/

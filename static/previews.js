@@ -6,6 +6,7 @@ let _batchFilter = '';
 let _categoryFilter = '';
 let _tagFilter = '';
 let _sortCol = 'archived_at';
+let _searchQuery = '';
 
 async function loadPreviews() {
   // First fetch to get total count
@@ -13,6 +14,7 @@ async function loadPreviews() {
   if (_batchFilter) countParams.set('batch_id', _batchFilter);
   if (_categoryFilter) countParams.set('category', _categoryFilter);
   if (_tagFilter) countParams.set('tag', _tagFilter);
+  if (_searchQuery) countParams.set('search', _searchQuery);
   const countResp = await fetch(`/api/archive?${countParams}`);
   if (!countResp.ok) return;
   const countData = await countResp.json();
@@ -30,6 +32,7 @@ async function loadPreviews() {
     if (_batchFilter) params.set('batch_id', _batchFilter);
     if (_categoryFilter) params.set('category', _categoryFilter);
     if (_tagFilter) params.set('tag', _tagFilter);
+    if (_searchQuery) params.set('search', _searchQuery);
     const resp = await fetch(`/api/archive?${params}`);
     if (!resp.ok) break;
     const data = await resp.json();
@@ -129,6 +132,15 @@ document.getElementById('tag-filter').addEventListener('change', (e) => {
 document.getElementById('sort-select').addEventListener('change', (e) => {
   _sortCol = e.target.value;
   loadPreviews();
+});
+
+let _searchTimer = null;
+document.getElementById('search-input').addEventListener('input', (e) => {
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(() => {
+    _searchQuery = e.target.value.trim();
+    loadPreviews();
+  }, 300);
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
