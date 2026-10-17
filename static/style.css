@@ -23,6 +23,7 @@ body {
   color: var(--text);
   line-height: 1.6;
   min-height: 100vh;
+  -webkit-text-size-adjust: 100%;
 }
 
 a { color: var(--accent); text-decoration: none; }
@@ -224,7 +225,7 @@ button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; }
 .collapsible-section > :last-child { padding-bottom: 20px; }
 
 .bookmarklet-desc { font-size: 0.85rem; color: var(--text-muted); margin: 16px 0 14px; }
-.bookmarklet-row { display: flex; align-items: center; gap: 14px; }
+.bookmarklet-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 .bookmarklet-drag {
   display: inline-block;
   background: var(--surface2);
@@ -459,7 +460,7 @@ select:focus { outline: none; border-color: var(--accent); }
 .score-controls button:disabled { opacity: 0.5; cursor: not-allowed; }
 .score-status { font-size: 0.8rem; color: var(--accent); font-weight: 600; white-space: nowrap; }
 
-.category-controls { display: flex; align-items: center; gap: 8px; }
+.category-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .category-controls select {
   padding: 6px 10px;
   font-size: 0.85rem;
@@ -880,6 +881,88 @@ td:nth-child(2) { word-break: break-word; }
 
   .archive-controls { flex-direction: column; align-items: stretch; }
   .score-controls { max-width: none; }
+}
+
+/* ── Mobile layout ───────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Header wraps nav onto a second row and scrolls away instead of pinning */
+  header {
+    position: static;
+    flex-wrap: wrap;
+    padding: 10px 16px;
+    gap: 6px 16px;
+  }
+  header h1 { white-space: nowrap; }
+  nav { gap: 4px; }
+  nav a { padding: 6px 10px; }
+
+  main { padding: 16px 16px 32px; gap: 24px; }
+
+  .submit-section, #progress-section, #history-section { padding: 16px; }
+  .collapsible-section > summary { padding: 14px 16px; }
+  .collapsible-section > :not(summary) { padding: 0 16px; }
+
+  /* iOS Safari zooms the page when focusing a field under 16px */
+  input[type="text"], textarea, select,
+  #search-input,
+  .score-controls input[type="text"],
+  .category-controls select,
+  .previews-controls select { font-size: 16px; }
+
+  /* Triage + thumbnail filters: full-width search, selects two-up */
+  .triage-controls { flex-direction: column; align-items: stretch; gap: 12px; }
+  .filter-bar,
+  .previews-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .filter-bar #search-input,
+  .previews-controls #search-input,
+  .previews-controls .total-count { grid-column: 1 / -1; }
+  .filter-bar label { flex-direction: column; align-items: stretch; gap: 2px; min-width: 0; }
+  .filter-bar select,
+  .previews-controls select { width: 100%; min-width: 0; }
+
+  /* Archive controls: keep the filter row from widening the column */
+  .archive-controls > * { min-width: 0; }
+  .score-controls { flex-wrap: wrap; }
+  .category-controls select { flex: 1 1 140px; min-width: 0; }
+
+  .card-grid { gap: 14px; }
+  .thumb-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+
+  /* Transcript modal becomes a full-screen sheet; confirm dialog stays small */
+  .modal-backdrop:has(> .modal:not(.modal-sm)) { padding: 0; }
+  .modal:not(.modal-sm) {
+    max-width: none;
+    max-height: none;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+  }
+  /* Title + close on the first line, timestamp toggle + copy below */
+  .modal-header { flex-wrap: wrap; gap: 8px 12px; padding: 12px 16px 10px; }
+  .modal-actions { display: contents; }
+  .modal-title { flex: 1 1 calc(100% - 52px); min-width: 0; }
+  .modal-close { order: 1; font-size: 1.8rem; padding: 0 8px; margin: -4px -8px 0 0; }
+  .ts-toggle-label, .btn-copy { order: 2; }
+  .btn-copy { margin-left: auto; }
+  .modal-body { padding: 14px 16px; overscroll-behavior: contain; }
+  /* Full-width player with the speed buttons on their own row */
+  .modal-audio-wrap { flex-wrap: wrap; }
+  .modal-audio-wrap audio { flex: 1 1 100%; }
+  .playback-speed { flex: 1 1 100%; }
+  .speed-btn { flex: 1; padding: 6px 0; font-size: 0.85rem; }
+}
+
+/* ── Touch targets ───────────────────────────────────────────────────────── */
+@media (pointer: coarse) {
+  .card-actions { gap: 4px; }
+  /* No hover to reveal them on touch, so start less faded */
+  .flag-btn, .delete-mark-btn, .watch-toggle-btn { padding: 6px 8px; opacity: 0.7; }
+  .transcript-btn { padding: 8px 14px; }
+  .page-btn { padding: 8px 14px; }
 }
 
 /* ── Utility ─────────────────────────────────────────────────────────────── */

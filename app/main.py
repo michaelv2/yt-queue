@@ -662,4 +662,17 @@ async def serve_bookmarklet_test():
 
 # ── Static files (must be last) ───────────────────────────────────────────────
 
-app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+class RevalidatingStaticFiles(StaticFiles):
+    """Static files that browsers must revalidate (cheap 304 via ETag) before reuse.
+
+    Without Cache-Control, Safari caches heuristically for days, and an iOS
+    home-screen web app has no reload button to pick up UI changes.
+    """
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/", RevalidatingStaticFiles(directory=str(STATIC_DIR), html=True), name="static")
