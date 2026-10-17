@@ -8,11 +8,11 @@ app/summarizer.py:
   3. assign_categories_bulk — coverage, agreement with the archive's current labels
 
 Each run is MODEL@VARIANT:
-  asis     OllamaLLM exactly as in production
-  nothink  `think: false` sent at the top level (production nests it in `options`,
-           where Ollama ignores it) and num_predict floored at 256 — a reasoning model
-           spends ~60 hidden tokens even with thinking off, so production's 20-token
-           relevance budget comes back empty
+  asis     OllamaLLM exactly as in production. Since 2026-10-11 that sends `think: false`
+           at the top level (it used to sit in `options`, where Ollama ignores it) with
+           token caps sized for reasoning models' hidden tokens
+  nothink  the same fix built here, with num_predict floored at 256 — kept for
+           comparing against code from before that change
   low      `think: "low"` with num_predict floored at 1024
 
 Ground truth for relevance is thin: is_flagged marks videos you found worth keeping,
@@ -46,7 +46,7 @@ sys.path.insert(0, str(ROOT))
 
 from app.summarizer import OllamaLLM, _extract_json, _strip_think_tags  # noqa: E402
 
-DEFAULT_RUNS = ["gemma3:27b@asis", "muse-glimmer:30b@asis", "muse-glimmer:30b@nothink"]
+DEFAULT_RUNS = ["gemma3:27b@asis", "muse-glimmer:30b-16k@asis"]
 VARIANTS = {
     "asis": None,
     "nothink": {"think": False, "min_tokens": 256},

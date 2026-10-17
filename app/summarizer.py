@@ -286,7 +286,11 @@ class OllamaLLM(BaseLLM):
         self._model = model
         self._base_url = base_url.rstrip("/")
 
-    def _chat(self, system: str, user: str, max_tokens: int = 800) -> str:
+    # Token caps are generous because reasoning models spend hidden tokens even with
+    # thinking off: muse-glimmer used ~1,100 tokens to write 877 chars of category JSON,
+    # so the old caps (20 for a score, 800 for categories) cut its output off. num_predict
+    # is a ceiling, so non-reasoning models like gemma3 still stop as soon as they're done.
+    def _chat(self, system: str, user: str, max_tokens: int = 1500) -> str:
         import json
         import urllib.request
 
@@ -297,8 +301,10 @@ class OllamaLLM(BaseLLM):
                 {"role": "user", "content": user},
             ],
             "stream": False,
-            # think:false disables Qwen3 reasoning mode; ignored by other models
-            "options": {"num_predict": max_tokens, "think": False},
+            # Top-level, not in "options": Ollama ignores it there, so reasoning models
+            # (qwen3, muse-glimmer) thought on every call. Accepted by non-reasoning models.
+            "think": False,
+            "options": {"num_predict": max_tokens},
         }).encode()
         req = urllib.request.Request(
             f"{self._base_url}/api/chat",
@@ -339,7 +345,7 @@ class OllamaLLM(BaseLLM):
             f"Summary: {summary}\n\nCriteria: {criteria}"
         )
         try:
-            raw = self._chat(self._SYSTEM, user, max_tokens=20)
+            raw = self._chat(self._SYSTEM, user, max_tokens=512)
             import re
             m = re.search(r"\d+", raw)
             score = int(m.group()) if m else 0
@@ -357,7 +363,7 @@ class OllamaLLM(BaseLLM):
             f'Return only a JSON array: [{{"name": "...", "description": "one sentence"}}, ...]. No other text.'
         )
         try:
-            raw = self._chat(self._SYSTEM, user, max_tokens=800)
+            raw = self._chat(self._SYSTEM, user, max_tokens=2000)
             data = _extract_json(raw)
             if isinstance(data, list):
                 return [{"name": d["name"], "description": d.get("description", "")} for d in data if "name" in d]
@@ -376,7 +382,7 @@ class OllamaLLM(BaseLLM):
             'Return only JSON: {"id": "category", ...}. Use exact category names. No other text.'
         )
         try:
-            raw = self._chat(self._SYSTEM, user, max_tokens=800)
+            raw = self._chat(self._SYSTEM, user, max_tokens=3000)
             data = _extract_json(raw)
             if isinstance(data, dict):
                 valid = set(category_names)
